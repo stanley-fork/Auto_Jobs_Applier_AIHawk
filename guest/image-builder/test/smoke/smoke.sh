@@ -78,13 +78,14 @@ check "dotagentd is in no group but its own, and dot is in neither of the two gr
 # --- the stand-in for OpenRouter (the key is lib.sh's) ---
 start_fake_openrouter
 # --- the stand-in for invisible-playwright-mcp ---
-# The engine's own test fake (the one owner of what a stand-in answers) and the tool list it serves, as
-# captured from the pinned server, copied out of the tree under test where dot may reach them. It runs on
+# The engine's own test fake (the one owner of what a stand-in answers) and what it serves, the engine's capture
+# of the pinned server (nanobot/dots/invisible_playwright_mcp.json, where the fake looks for it two directories
+# up), copied out of the tree under test where dot may reach them. It runs on
 # the engine's python, which has the `mcp` package, as dot: the engine starts it through dot-agentd's relay.
 ENGINE_TESTS=$(cd "$HERE/../../../../invisible_engine_dots/tests" && pwd)
 FAKE_MCP_DIR=/usr/local/lib/smoke-fake/mcp
 install -D -m 0644 "$ENGINE_TESTS/fakes/fake_mcp_server.py" "$FAKE_MCP_DIR/fakes/fake_mcp_server.py"
-for tools in "$ENGINE_TESTS"/fixtures/mcp-tools-*.json; do install -D -m 0644 "$tools" "$FAKE_MCP_DIR/fixtures/$(basename "$tools")"; done
+install -D -m 0644 "$ENGINE_TESTS/../nanobot/dots/invisible_playwright_mcp.json" "$(dirname "$FAKE_MCP_DIR")/nanobot/dots/invisible_playwright_mcp.json"
 FAKE_MCP=/usr/local/lib/smoke-fake/invisible-playwright-mcp
 printf '#!/bin/sh\nexec /opt/invisible-dots-engine/bin/python -I -B %s/fakes/fake_mcp_server.py "$@"\n' "$FAKE_MCP_DIR" > "$FAKE_MCP"
 chmod 0755 "$FAKE_MCP"
@@ -413,7 +414,7 @@ check_offered() { # n, label, permissions json, expected tools (sorted JSON)
 BROWSER_GRANTED='"computer.screenshot":"allow","browser.identity.list":"allow","browser.identity.create":"allow","browser.identity.delete":"ask","browser.identity.launch":"allow","browser.identity.close":"allow","browser.navigate":"allow","browser.read":"allow","browser.act":"allow"'
 check_offered 1 "every permission granted (files.write and browser.identity.delete ask)" \
   '{"computer.exec":"allow","files.read":"allow","files.write":"ask","automations":"allow",'"$BROWSER_GRANTED"'}' \
-  '["apply_patch","browser_click","browser_click_at","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_text","browser_screenshot","browser_scroll","browser_select_option","browser_snapshot","browser_type","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
+  '["apply_patch","browser_click","browser_click_at","browser_evaluate","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_html","browser_read_text","browser_select_option","browser_snapshot","browser_take_screenshot","browser_type","browser_upload_files","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
 check_offered 2 "exec denied, files.read allowed, the rest missing from the map (deny)" \
   '{"computer.exec":"deny","files.read":"allow"}' \
   '["find_files","grep","list_dir","read_file"]'

@@ -49,8 +49,8 @@ disk lay them out. This smoke does, in one Linux container, with no QEMU:
 The Dot's browser is `invisible-playwright-mcp`, one process per open identity, started by the
 engine through `dot-agentd`'s relay so that it runs as `dot`. The smoke installs a stand-in for it as
 `INVISIBLE_DOTS_MCP_COMMAND`: the engine's own test fake (`invisible_engine_dots/tests/fakes/fake_mcp_server.py`,
-the one owner of what a stand-in answers) on the engine's python, serving the tool list captured from
-the pinned server (`invisible_engine_dots/tests/fixtures/mcp-tools-<version>.json`). It records its
+the one owner of what a stand-in answers) on the engine's python, serving what the engine captured from
+the pinned server (`invisible_engine_dots/nanobot/dots/invisible_playwright_mcp.json`). It records its
 environment, its working directory and every call it receives in `$INVISIBLE_MCP_HOME/record.jsonl`,
 and the checks read that file. What they pin:
 

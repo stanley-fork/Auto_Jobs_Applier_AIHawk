@@ -36,14 +36,15 @@ class TestParse:
         assert parse_skill(skill_file("fares-2", "x"), "fares-2") == ("fares-2", "x")
 
 
-def test_every_built_in_skill_is_valid_and_teaches_the_browser_first() -> None:
+def test_every_built_in_skill_is_valid_and_teaches_the_browser_identities() -> None:
     skills = builtin_skills()
     assert [s.name for s in skills] == sorted(p.parent.name for p in BUILTIN_SKILLS_DIR.glob("*/SKILL.md"))
     browser = next(s for s in skills if s.name == "invisible-playwright")
     assert browser.source == "builtin" and browser.path.endswith("/skills/invisible-playwright/SKILL.md") and "nanobot" not in browser.path
-    # It names the tools the Dot has, in the order a page cannot tell from a person's.
-    for tool in ("browser_identity_launch", "browser_snapshot", "browser_click", "browser_click_at", "browser_screenshot", "browser_identity_close"):
+    # It names the identity tools the Dot has, and leaves how a page is driven to the server's instructions.
+    for tool in ("browser_identity_list", "browser_identity_create", "browser_identity_launch", "browser_identity_close"):
         assert tool in browser.content
+    assert "browser server's instructions" in browser.content
 
 
 async def test_the_dots_own_skills_are_read_from_its_computer_and_a_bad_one_is_left_out(tmp_path: Path) -> None:

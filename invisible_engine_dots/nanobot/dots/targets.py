@@ -147,11 +147,6 @@ def browser_press_key_target(params: Mapping[str, Any]) -> str | None:
     return _on_identity(params, _string(params, "key") or None)
 
 
-def browser_scroll_target(params: Mapping[str, Any]) -> str | None:
-    direction = _string(params, "direction")
-    return _on_identity(params, direction if direction in ("up", "down") else None)
-
-
 def browser_identity_only_target(params: Mapping[str, Any]) -> str | None:
     """A browser call with nothing to name but the identity it acted on."""
     return _on_identity(params, None)

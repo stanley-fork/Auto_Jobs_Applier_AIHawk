@@ -2,7 +2,7 @@
 
 The manager's collaborators are real: a database file, nanobot's MCP client, the relay command line the
 production Computer builds (run by `fake_relay.py`), and the MCP protocol (`fake_mcp_server.py`, which
-serves the captured tool list of invisible-playwright-mcp). Directories are real directories under
+serves the engine's capture of invisible-playwright-mcp). Directories are real directories under
 `tmp_path`. Each test below is a behavior of architecture section 6; the ones with a counterpart in the
 old TypeScript manager keep its wording.
 """
@@ -279,6 +279,8 @@ async def test_starts_the_server_as_dot_through_the_relay_with_the_environment_o
     assert environment[BROWSER_ENV["PROXY"]] == "http://user:pw@proxy.test:8080"
     # No self-repair of invisible_core from the package index.
     assert environment[BROWSER_ENV["CORE_AUTOFIX"]] == "off"
+    # The engine opens and closes the browser: the server serves `main` alone and says only the page rules.
+    assert environment[BROWSER_ENV["HOST_MANAGED"]] == "1"
     assert "OPENROUTER_API_KEY" not in environment and "SOME_OTHER_SECRET" not in environment
     assert start["cwd"] == str(root)
 
@@ -292,7 +294,7 @@ async def test_starts_the_server_as_dot_through_the_relay_with_the_environment_o
     assert mcp_runs[0]["cwd"] == str(root)
     assert [pair.partition("=")[0] for pair in mcp_runs[0]["env"]] == [
         BROWSER_ENV[name]
-        for name in ("MCP_HOME", "MCP_SESSION_ID", "PROFILE_DIR", "HEADLESS", "DISPLAY", "CORE_AUTOFIX")
+        for name in ("MCP_HOME", "MCP_SESSION_ID", "PROFILE_DIR", "HEADLESS", "DISPLAY", "CORE_AUTOFIX", "HOST_MANAGED")
     ]
     assert mcp_runs[0]["env_from"] == [BROWSER_ENV["PROXY"]]
     assert "user:pw" not in json.dumps(mcp_runs[0])
@@ -342,7 +344,7 @@ async def test_calls_browser_open_with_only_the_browser_role_and_retries_while_t
     await manager.launch(identity.id)
 
     opens = [args for name, args in env.calls(identity.id) if name == "browser_open"]
-    assert opens == [{"browser": "main"}] * 3
+    assert opens == [{}] * 3
     assert manager.is_open(identity.id)
 
 
@@ -435,20 +437,21 @@ async def test_an_action_on_a_closed_identity_does_not_launch_it(env: Env) -> No
     assert unknown.value.code == "not_open"
 
 
-async def test_adds_the_browser_role_to_every_call_and_the_caller_cannot_choose_another(env: Env) -> None:
+async def test_starts_the_server_on_the_identitys_browser_alone_and_a_caller_cannot_choose_another(env: Env) -> None:
     manager = env.manager()
     identity = await manager.create("roles")
     await manager.launch(identity.id)
 
     result = await manager.call_tool(identity.id, "browser_navigate", {"url": "https://example.com/"})
-    await manager.call_tool(identity.id, "browser_navigate", {"url": "https://example.org/", "browser": "support"})
+    other = await manager.call_tool(identity.id, "browser_navigate", {"url": "https://example.org/", "browser": "support"})
 
     assert result_text(result) == "200 https://example.com/"
+    # Started as a host that opens the browser itself: the server serves `main` alone and takes no `browser`.
+    [start] = [entry for entry in env.record(identity.id) if entry["kind"] == "start"]
+    assert start["env"]["INVISIBLE_MCP_HOST_MANAGED"] == "1"
+    assert result_is_error(other) and "browser" in result_text(other)
     navigations = [args for name, args in env.calls(identity.id) if name == "browser_navigate"]
-    assert navigations == [
-        {"url": "https://example.com/", "browser": "main"},
-        {"url": "https://example.org/", "browser": "main"},
-    ]
+    assert navigations[0] == {"url": "https://example.com/"}
 
 
 async def test_an_image_comes_back_as_a_content_block_and_an_error_as_an_error(env: Env) -> None:
@@ -979,7 +982,7 @@ async def test_a_frame_is_the_jpeg_of_the_servers_watch_and_asks_nothing_else(en
     assert mime == "image/jpeg"
     assert data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")
     assert [name for name, _ in env.calls(identity.id)] == ["browser_open", "browser_watch"]
-    assert env.calls(identity.id)[-1][1] == {"browser": "main"}
+    assert env.calls(identity.id)[-1][1] == {}
 
 
 async def test_a_frame_is_not_a_use_so_a_page_that_polls_cannot_keep_a_browser_open(env: Env) -> None:

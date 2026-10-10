@@ -37,13 +37,15 @@ def test_every_tool_maps_to_the_permission_of_the_design() -> None:
         "browser_navigate": "browser.navigate",
         "browser_snapshot": "browser.read",
         "browser_read_text": "browser.read",
-        "browser_screenshot": "browser.read",
+        "browser_read_html": "browser.read",
+        "browser_take_screenshot": "browser.read",
+        "browser_evaluate": "browser.read",
         "browser_click": "browser.act",
         "browser_click_at": "browser.act",
         "browser_type": "browser.act",
         "browser_press_key": "browser.act",
         "browser_select_option": "browser.act",
-        "browser_scroll": "browser.act",
+        "browser_upload_files": "browser.act",
     }
 
 
@@ -170,7 +172,9 @@ def test_the_tools_of_one_registry_share_the_computer_of_the_deps(tmp_path, dot_
 # The gate treats two calls as the same when their arguments, after the tool's own cast and validation,
 # have the same canonical JSON (store.canonical_arguments). Python's json tells 1 from 1.0, so the one
 # way this could split a repeated identical call in two is a number that reaches the gate once as an int
-# and once as a float. These tests close that for every tool of the table.
+# and once as a float: an integer argument reaches it as an int however it is written, and a `number`
+# argument (the browser server's) is written one way when it is whole. These tests close that for every
+# tool of the table.
 
 
 def _schema_nodes(schema, path):
@@ -200,9 +204,8 @@ def test_no_argument_of_a_tool_in_the_table_is_a_float_or_has_no_type(tmp_path, 
         for path, node in _schema_nodes(registry.get(name).parameters, (name,)):
             types = _types(node)
             where = ".".join(path)
-            assert types <= {"string", "integer", "boolean", "array", "object", "null"}, (
-                f"{where} is typed {types}: a float argument makes 1 and 1.0 two calls; "
-                "normalize store.canonical_arguments before adding one"
+            assert types <= {"string", "integer", "number", "boolean", "array", "object", "null"}, (
+                f"{where} is typed {types}: the gate has no canonical form for it"
             )
             assert node.get("type") is not None, f"{where} has no type, so nothing casts it"
             if "integer" in types:
@@ -213,6 +216,33 @@ def test_no_argument_of_a_tool_in_the_table_is_a_float_or_has_no_type(tmp_path, 
 _EXTRA_ARGUMENTS = {"cron": {"action": "add", "message": "m"}}
 
 
+def test_a_whole_number_is_one_call_however_the_model_writes_it(tmp_path, dot_store) -> None:
+    """Known-bad: canonical_arguments without its whole-number rule - 10 and 10.0 are then two calls, and an
+    approved click asked again as 10.0 waits for a second approval."""
+    from nanobot.dots.permissions import build_registry
+    from nanobot.dots.store import canonical_arguments
+
+    registry = build_registry(_deps(tmp_path, dot_store))
+    checked = []
+    for name in TOOL_PERMISSIONS:
+        schema = registry.get(name).parameters
+        for key, node in schema["properties"].items():
+            if "number" not in _types(node):
+                continue
+            required = {k: (10 if "number" in _types(schema["properties"][k]) else _sample(schema["properties"][k]))
+                        for k in schema.get("required", [])}
+
+            def prepared(argument):
+                _tool, params, error = registry.prepare_call(name, {**required, key: argument})
+                assert error is None, f"{name}.{key}={argument!r}: {error}"
+                return params
+
+            assert canonical_arguments(prepared(10)) == canonical_arguments(prepared(10.0))
+            assert canonical_arguments(prepared(10.5)) != canonical_arguments(prepared(10))
+            checked.append(f"{name}.{key}")
+    assert "browser_click_at.x" in checked and "browser_click_at.y" in checked
+
+
 def _sample(schema):
     declared = [t for t in _types(schema) if t != "null"][0]
     if "enum" in schema:
@@ -221,6 +251,8 @@ def _sample(schema):
         return "x"
     if declared == "integer":
         return max(schema.get("minimum", 1), 1)
+    if declared == "number":
+        return 10
     if declared == "boolean":
         return True
     if declared == "array":
@@ -283,24 +315,16 @@ PAGE_PERMISSIONS = {"browser.navigate", "browser.read", "browser.act"}
 BROWSING_WORDS = {"web", "fetch", "http", "https", "url", "browse", "chromium", "chrome", "firefox", "playwright", "selenium", "puppeteer", "scrape", "crawl"}
 
 
-def _mcp_tool_names() -> set[str]:
-    import json
-
-    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "mcp-tools-0.70.2.json"
-    return {tool["name"] for tool in json.loads(fixture.read_text(encoding="utf-8"))["tools"]}
-
-
 def test_every_browser_tool_is_served_by_invisible_playwright_mcp_and_no_other_tool_browses(tmp_path, dot_store) -> None:
     # The owner's rule: the only browser of a Dot is invisible-playwright-mcp. An identity tool is the
-    # BrowserManager's, which starts that server and nothing else; a page tool names the tool of that server it
-    # calls, and the captured tool list of the pinned version has it. A row that is neither is refused here.
+    # BrowserManager's, which starts that server and nothing else; a page tool is a tool of that server, as the
+    # capture of the pinned version has it. A row that is neither is refused here.
     from nanobot.dots import browser_tools
     from nanobot.dots.browser import BrowserManager
     from nanobot.dots.permissions import build_registry
 
     deps = _deps(tmp_path, dot_store)
     registry = build_registry(deps)
-    served = _mcp_tool_names()
     manager_tools = (
         browser_tools.BrowserIdentityListTool,
         browser_tools.BrowserIdentityCreateTool,
@@ -316,19 +340,22 @@ def test_every_browser_tool_is_served_by_invisible_playwright_mcp_and_no_other_t
         elif entry.permission in PAGE_PERMISSIONS:
             assert isinstance(tool, browser_tools.BrowserPageTool), name
             assert tool.browser is deps.browser, name
-            assert name in browser_tools.PAGE_TOOLS, name
-            assert browser_tools.PAGE_TOOLS[name].mcp_tool in served, f"{name} calls a tool the server does not have"
+            assert name in browser_tools.SERVER_TOOLS, f"{name} is not a tool the server has"
         else:
             # Whatever else the table holds is no browser: not by its permission, its name or its class.
             assert not name.startswith("browser"), name
             assert not isinstance(tool, (browser_tools.BrowserPageTool, *manager_tools)), name
             assert not set(name.split("_")) & BROWSING_WORDS, name
-    # And every page tool that is defined has its row: nothing defined is left out of the permission table.
-    assert set(browser_tools.PAGE_TOOLS) == {name for name, e in TOOL_PERMISSIONS.items() if e.permission in PAGE_PERMISSIONS}
 
 
 def test_each_browser_permission_offers_its_own_tools_only() -> None:
-    assert offered_tools({"browser.read": "allow"}) == ["browser_read_text", "browser_screenshot", "browser_snapshot"]
+    assert offered_tools({"browser.read": "allow"}) == [
+        "browser_evaluate",
+        "browser_read_html",
+        "browser_read_text",
+        "browser_snapshot",
+        "browser_take_screenshot",
+    ]
     assert offered_tools({"browser.navigate": "ask"}) == ["browser_navigate"]
     assert offered_tools({"browser.identity.launch": "allow"}) == ["browser_identity_launch"]
     assert offered_tools({"computer.screenshot": "allow"}) == ["computer_screenshot"]
@@ -337,9 +364,9 @@ def test_each_browser_permission_offers_its_own_tools_only() -> None:
         "browser_click",
         "browser_click_at",
         "browser_press_key",
-        "browser_scroll",
         "browser_select_option",
         "browser_type",
+        "browser_upload_files",
     ]
 
 
@@ -354,8 +381,9 @@ def test_a_browser_call_names_its_identity_and_what_it_acted_on() -> None:
     assert tool_target("browser_click", {"identity_id": ident, "selector": "#buy"}) == f"{ident}: #buy"
     assert tool_target("browser_read_text", {"identity_id": ident}) == ident
     assert tool_target("browser_click_at", {"identity_id": ident, "x": 10, "y": 20}) == f"{ident}: at 10,20"
-    assert tool_target("browser_scroll", {"identity_id": ident, "direction": "down"}) == f"{ident}: down"
-    assert tool_target("browser_screenshot", {"identity_id": ident}) == ident
+    assert tool_target("browser_take_screenshot", {"identity_id": ident}) == ident
+    assert tool_target("browser_evaluate", {"identity_id": ident, "expression": "document.cookie"}) == ident
+    assert tool_target("browser_upload_files", {"identity_id": ident, "selector": "#cv", "paths": ["/x"]}) == f"{ident}: #cv"
     assert tool_target("browser_identity_launch", {"identity_id": ident}) == ident
     assert tool_target("browser_identity_create", {"name": "Shopping", "proxy": "http://u:pw@h:1"}) == "Shopping"
     assert tool_target("browser_identity_list", {}) is None

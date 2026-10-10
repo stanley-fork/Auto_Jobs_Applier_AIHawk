@@ -116,6 +116,9 @@ BROWSER_ENV = {
     "PROXY": "STEALTHFOX_PROXY",
     "DISPLAY": "DISPLAY",
     "CORE_AUTOFIX": "INVISIBLE_CORE_AUTOFIX",
+    # The engine opens and closes the browser and offers the model the page tools only: the server then serves
+    # `main` alone, no tool takes `browser`, and its instructions are the page rules.
+    "HOST_MANAGED": "INVISIBLE_MCP_HOST_MANAGED",
 }
 
 # The `system.event` name of a cancelled task; its data is `{"task_id": ...}`.

@@ -158,12 +158,12 @@ def _build_browser_identity_close(deps: ToolDeps) -> Tool:
 
 
 def _build_page_tool(name: str) -> Callable[[ToolDeps], Tool]:
-    """The builder of a page tool: browser_tools.PAGE_TOOLS says what it calls."""
+    """The builder of a page tool: the tool of invisible-playwright-mcp of that name (browser_tools.SERVER_TOOLS)."""
 
     def build(deps: ToolDeps) -> Tool:
-        from nanobot.dots.browser_tools import PAGE_TOOLS, BrowserPageTool
+        from nanobot.dots.browser_tools import SERVER_TOOLS, BrowserPageTool
 
-        return BrowserPageTool(deps.browser, PAGE_TOOLS[name])
+        return BrowserPageTool(deps.browser, SERVER_TOOLS[name])
 
     return build
 
@@ -196,13 +196,17 @@ TOOL_PERMISSIONS: Mapping[str, ToolEntry] = MappingProxyType(
         "browser_navigate": ToolEntry("browser.navigate", _build_page_tool("browser_navigate"), targets.browser_navigate_target, arguments=targets.navigate_arguments),
         "browser_snapshot": ToolEntry("browser.read", _build_page_tool("browser_snapshot"), targets.browser_identity_only_target),
         "browser_read_text": ToolEntry("browser.read", _build_page_tool("browser_read_text"), targets.browser_selector_target),
-        "browser_screenshot": ToolEntry("browser.read", _build_page_tool("browser_screenshot"), targets.browser_identity_only_target),
+        "browser_read_html": ToolEntry("browser.read", _build_page_tool("browser_read_html"), targets.browser_identity_only_target),
+        "browser_take_screenshot": ToolEntry("browser.read", _build_page_tool("browser_take_screenshot"), targets.browser_identity_only_target),
+        # Reads with JavaScript; the server refuses a script that acts on the page and names the tool to use instead.
+        "browser_evaluate": ToolEntry("browser.read", _build_page_tool("browser_evaluate"), targets.browser_identity_only_target),
         "browser_click": ToolEntry("browser.act", _build_page_tool("browser_click"), targets.browser_selector_target),
         "browser_click_at": ToolEntry("browser.act", _build_page_tool("browser_click_at"), targets.browser_click_at_target),
         "browser_type": ToolEntry("browser.act", _build_page_tool("browser_type"), targets.browser_selector_target),
         "browser_press_key": ToolEntry("browser.act", _build_page_tool("browser_press_key"), targets.browser_press_key_target),
         "browser_select_option": ToolEntry("browser.act", _build_page_tool("browser_select_option"), targets.browser_selector_target),
-        "browser_scroll": ToolEntry("browser.act", _build_page_tool("browser_scroll"), targets.browser_scroll_target),
+        # Attaches files of the dot user, the ones its commands can read, to a file field of the page.
+        "browser_upload_files": ToolEntry("browser.act", _build_page_tool("browser_upload_files"), targets.browser_selector_target),
     }
 )
 

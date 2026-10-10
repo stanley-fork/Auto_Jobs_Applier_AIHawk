@@ -1,14 +1,14 @@
 """The browser tools of the Dot against the real BrowserManager and a fake MCP server, and through a real turn.
 
 Each tool is run the way the engine runs one (`run_tool`: registry, cast, validation, error wrapping). The
-MCP server is `fake_mcp_server.py`, which serves the captured tool list of invisible-playwright-mcp and
-records every call it gets, so what a tool sends is read off the server and not off the tool.
+MCP server is `fake_mcp_server.py`, which serves invisible-playwright-mcp's own tools as the engine captured them
+(`nanobot/dots/invisible_playwright_mcp.json`) and records every call it gets, so what a tool sends is read off
+the server and not off the tool.
 """
 
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from fakes.browser_manager import make_browser_manager, mcp_home
 from fakes.dot_config import ALLOW_ALL
-from fakes.fake_mcp_server import FIXTURE, PNG, read_record, write_control
+from fakes.fake_mcp_server import PNG, read_record, write_control
 from fakes.local_computer import LocalComputer
 from fakes.run_tool import run_tool
 from fakes.scripted_provider import call, calls, says
@@ -29,10 +29,10 @@ from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.cron.service import CronService
 from nanobot.dots import store as s
-from nanobot.dots.browser import REQUEST_TIMEOUT_S, BrowserManager
-from nanobot.dots.browser_tools import PAGE_TOOLS, TYPE_TEXT_MAX, TYPING_SECONDS_PER_KEY_MAX
+from nanobot.dots.browser import BrowserManager
+from nanobot.dots.browser_tools import SERVER_TOOLS
 from nanobot.dots.images import IMAGES_HEADER, TurnImages, bind_turn_images, reset_turn_images
-from nanobot.dots.permissions import ToolDeps, build_registry
+from nanobot.dots.permissions import TOOL_PERMISSIONS, ToolDeps, build_registry
 from nanobot.dots.store import DotStore
 from nanobot.dots.turns import OpeningMessage, TurnUnit
 
@@ -114,93 +114,84 @@ def created_id(text: str) -> str:
     return found.group(1)
 
 
-def _fixture_tools() -> dict[str, dict[str, Any]]:
-    return {tool["name"]: tool for tool in json.loads(FIXTURE.read_text(encoding="utf-8"))["tools"]}
-
-
 # ---------------------------------------------------------------------------
-# The page tools call the tool of the server they name
+# The page tools are the server's own
 # ---------------------------------------------------------------------------
 
-# model tool, its arguments (besides identity_id), the MCP tool called and the arguments it gets (besides browser)
-PAGE_CALLS: list[tuple[str, dict[str, Any], str, dict[str, Any]]] = [
-    ("browser_navigate", {"url": "https://example.com/"}, "browser_navigate", {"url": "https://example.com/"}),
-    ("browser_snapshot", {}, "browser_snapshot", {}),
-    ("browser_read_text", {}, "browser_read_text", {}),
-    ("browser_read_text", {"selector": "h1"}, "browser_read_text", {"selector": "h1"}),
-    ("browser_read_text", {"max_chars": 20000}, "browser_read_text", {"max_chars": 20000}),
-    ("browser_read_text", {"selector": "h1", "max_chars": 50}, "browser_read_text", {"selector": "h1", "max_chars": 50}),
-    ("browser_screenshot", {}, "browser_take_screenshot", {}),
-    ("browser_click", {"selector": "#go"}, "browser_click", {"selector": "#go"}),
-    ("browser_click_at", {"x": 10, "y": 20}, "browser_click_at", {"x": 10, "y": 20}),
-    ("browser_type", {"selector": "#q", "text": "hello"}, "browser_type", {"selector": "#q", "text": "hello"}),
-    ("browser_press_key", {"key": "Enter"}, "browser_press_key", {"key": "Enter"}),
-    ("browser_select_option", {"selector": "#c", "value": "it"}, "browser_select_option", {"selector": "#c", "value": "it"}),
-    ("browser_scroll", {"direction": "down"}, "browser_press_key", {"key": "PageDown"}),
-    ("browser_scroll", {"direction": "up"}, "browser_press_key", {"key": "PageUp"}),
+# A page tool and arguments it is called with (besides identity_id): they reach the server's tool of that name as given.
+PAGE_CALLS: list[tuple[str, dict[str, Any]]] = [
+    ("browser_navigate", {"url": "https://example.com/"}),
+    ("browser_snapshot", {}),
+    ("browser_read_text", {}),
+    ("browser_read_text", {"selector": ":nth-match(li.item, 2)"}),
+    ("browser_read_text", {"selector": "h1", "max_chars": 50}),
+    ("browser_read_html", {"mode": "text"}),
+    ("browser_take_screenshot", {}),
+    ("browser_evaluate", {"expression": "document.title"}),
+    ("browser_click", {"selector": "#go"}),
+    ("browser_click_at", {"x": 10, "y": 20}),
+    ("browser_type", {"selector": "#q", "text": "hello"}),
+    ("browser_press_key", {"key": "Enter"}),
+    ("browser_select_option", {"selector": "#c", "value": "it"}),
+    ("browser_upload_files", {"selector": "#file", "paths": ["/home/dot/workspace/cv.pdf"]}),
 ]
+PAGE_TOOLS = {name for name in TOOL_PERMISSIONS if name in SERVER_TOOLS}
 
 
-@pytest.mark.parametrize(("tool", "arguments", "mcp_tool", "mcp_arguments"), PAGE_CALLS)
-async def test_a_page_tool_calls_the_mcp_tool_it_names_on_the_main_browser(
-    env: Env, tool: str, arguments: dict[str, Any], mcp_tool: str, mcp_arguments: dict[str, Any]
+@pytest.mark.parametrize(("tool", "arguments"), PAGE_CALLS)
+async def test_a_page_tool_calls_the_server_tool_of_its_name_with_the_arguments_given(
+    env: Env, tool: str, arguments: dict[str, Any]
 ) -> None:
     identity_id = await env.open_identity()
 
     result = await env.run(tool, identity_id=identity_id, **arguments)
 
     assert not isinstance(result, ToolResult) or not result.is_error, result
-    assert env.page_calls(identity_id) == [(mcp_tool, {**mcp_arguments, "browser": "main"})]
+    # The server serves the identity's browser alone: nothing is added, and the identity is not passed on.
+    assert env.page_calls(identity_id) == [(tool, arguments)]
 
 
 def test_every_page_tool_is_exercised_by_the_table_above() -> None:
-    assert {row[0] for row in PAGE_CALLS} == set(PAGE_TOOLS)
+    assert {row[0] for row in PAGE_CALLS} == PAGE_TOOLS
 
 
-@pytest.mark.parametrize(("tool", "arguments", "mcp_tool", "mcp_arguments"), PAGE_CALLS)
-def test_every_call_a_page_tool_makes_is_one_the_pinned_server_has_with_arguments_it_takes(
-    tool: str, arguments: dict[str, Any], mcp_tool: str, mcp_arguments: dict[str, Any]
-) -> None:
-    served = _fixture_tools()
-    sent = PAGE_TOOLS[tool].arguments({"identity_id": "x", **arguments})
-
-    assert sent == mcp_arguments
-    assert mcp_tool == PAGE_TOOLS[tool].mcp_tool
-    schema = served[mcp_tool]["inputSchema"]
-    assert set(sent) <= set(schema["properties"]), f"{tool}: {set(sent) - set(schema['properties'])}"
-    assert set(schema.get("required", [])) <= set(sent) | {"browser"}, f"{tool} leaves out a required argument"
+def test_the_page_tools_are_the_servers_tools_but_the_ones_that_open_close_or_watch_a_browser() -> None:
+    """The engine opens and closes an identity's browser itself (browser_identity_*), and its window is the UI's."""
+    assert set(SERVER_TOOLS) - PAGE_TOOLS == {"browser_open", "browser_close", "browser_list", "browser_status", "browser_watch"}
 
 
-async def test_the_model_cannot_choose_the_browser_or_add_an_argument_the_tool_does_not_have(env: Env) -> None:
+@pytest.mark.parametrize("tool", sorted(PAGE_TOOLS))
+def test_a_page_tool_says_what_the_server_says_and_takes_what_it_takes_and_the_identity(env: Env, tool: str) -> None:
+    """One fact, one owner: what a tool does and what its arguments mean are the server's words, as it serves them."""
+    offered = env.registry.get(tool)
+    served = SERVER_TOOLS[tool]
+
+    assert offered.description == served.description
+    assert list(offered.parameters["properties"]) == ["identity_id", *served.input_schema.get("properties", {})]
+    assert offered.parameters["required"] == ["identity_id", *served.input_schema.get("required", [])]
+    assert "browser_identity_launch" in offered.parameters["properties"]["identity_id"]["description"]
+    assert offered.read_only == served.read_only
+
+
+async def test_the_model_cannot_choose_another_browser(env: Env) -> None:
     identity_id = await env.open_identity()
 
     support = await env.run("browser_navigate", identity_id=identity_id, url="https://example.com/", browser="support")
-    seed = await env.run("browser_snapshot", identity_id=identity_id, seed=7)
 
     assert isinstance(support, ToolResult) and support.is_error and "browser" in support
-    assert isinstance(seed, ToolResult) and seed.is_error
-    assert env.page_calls(identity_id) == []
+    assert ("browser_navigate", {"url": "https://example.com/"}) not in env.page_calls(identity_id)
 
 
-async def test_the_longest_text_is_typed_and_a_longer_one_is_refused_before_it_reaches_the_server(env: Env) -> None:
+async def test_a_long_text_goes_to_the_server_whole(env: Env) -> None:
+    """The server answers within its own bound and goes on typing in the background (invisible-playwright-mcp's
+    `Work.typing`), so a text is not cut to fit one call."""
     identity_id = await env.open_identity()
-    longest = "x" * TYPE_TEXT_MAX
+    long = "x" * 2000
 
-    typed = await env.run("browser_type", identity_id=identity_id, selector="#q", text=longest)
-    refused = await env.run("browser_type", identity_id=identity_id, selector="#q", text=longest + "y")
+    typed = await env.run("browser_type", identity_id=identity_id, selector="#q", text=long)
 
     assert not isinstance(typed, ToolResult) or not typed.is_error, typed
-    assert f"at most {TYPE_TEXT_MAX}" in said(refused)
-    # The server was asked once: a text it could still be typing when the call times out never reaches it.
-    assert env.page_calls(identity_id) == [("browser_type", {"selector": "#q", "text": longest, "browser": "main"})]
-
-
-def test_the_longest_text_is_typed_in_half_the_time_of_a_call_at_the_slowest_pace_and_one_more_key_is_not() -> None:
-    assert TYPE_TEXT_MAX * TYPING_SECONDS_PER_KEY_MAX <= REQUEST_TIMEOUT_S / 2
-    assert (TYPE_TEXT_MAX + 1) * TYPING_SECONDS_PER_KEY_MAX > REQUEST_TIMEOUT_S / 2
-    # The call waits that long: the one number is the manager's default, and the text is described to the model.
-    assert inspect.signature(BrowserManager).parameters["request_timeout_s"].default == REQUEST_TIMEOUT_S
-    assert str(TYPE_TEXT_MAX) in PAGE_TOOLS["browser_type"].properties["text"]["description"]
+    assert env.page_calls(identity_id) == [("browser_type", {"selector": "#q", "text": long})]
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +199,9 @@ def test_the_longest_text_is_typed_in_half_the_time_of_a_call_at_the_slowest_pac
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("tool", "arguments", "_mcp", "_args"), PAGE_CALLS)
+@pytest.mark.parametrize(("tool", "arguments"), PAGE_CALLS)
 async def test_a_page_tool_on_an_identity_that_is_not_open_says_so_and_starts_nothing(
-    env: Env, tool: str, arguments: dict[str, Any], _mcp: str, _args: dict[str, Any]
+    env: Env, tool: str, arguments: dict[str, Any]
 ) -> None:
     identity = await env.manager.create("closed one")
 
@@ -372,45 +363,6 @@ async def test_what_the_server_answers_in_text_is_the_result(env: Env) -> None:
     assert key == "pressed Enter"
 
 
-async def test_a_max_chars_given_as_null_is_left_out_and_one_below_one_is_refused(env: Env) -> None:
-    identity_id = await env.open_identity()
-
-    await env.run("browser_read_text", identity_id=identity_id, max_chars=None)
-    refused = await env.run("browser_read_text", identity_id=identity_id, max_chars=0)
-
-    assert env.page_calls(identity_id) == [("browser_read_text", {"browser": "main"})]
-    assert isinstance(refused, ToolResult) and refused.is_error
-
-
-def _words(text: str) -> str:
-    return " ".join(text.split())
-
-
-def test_the_page_tools_say_what_the_pinned_server_says_of_the_arguments_they_pass_on() -> None:
-    """One fact, one owner: what an argument means is the server's, captured in the fixture, and ours repeats no more."""
-    served = _fixture_tools()
-    select = PAGE_TOOLS["browser_select_option"]
-    # The server picks an option by its visible label or by its value; the Dot's tool says the same, in that order.
-    assert "by its visible label or by its value" in _words(served["browser_select_option"]["description"])
-    assert "by its visible label or by its value" in select.description
-    assert "visible label" in select.properties["value"]["description"]
-    assert "not its label" not in select.description + select.properties["value"]["description"]
-    # The server cuts a long text at max_chars, marks the cut and has a default of its own: the Dot passes the
-    # argument on and states no number of its own.
-    read = PAGE_TOOLS["browser_read_text"]
-    assert served["browser_read_text"]["inputSchema"]["properties"]["max_chars"]["type"] == "integer"
-    assert set(read.properties) == {"selector", "max_chars"}
-    assert str(served["browser_read_text"]["inputSchema"]["properties"]["max_chars"]["default"]) not in read.description
-
-
-async def test_a_selector_given_as_null_is_left_out_and_the_server_reads_the_page(env: Env) -> None:
-    identity_id = await env.open_identity()
-
-    await env.run("browser_read_text", identity_id=identity_id, selector=None)
-
-    assert env.page_calls(identity_id) == [("browser_read_text", {"browser": "main"})]
-
-
 async def test_a_browser_the_server_lost_is_an_error_result_that_says_to_launch_the_identity_again(env: Env) -> None:
     identity_id = await env.open_identity()
     write_control(mcp_home(env.tmp_path, identity_id), lose_browser_always=True)
@@ -484,27 +436,30 @@ async def test_a_browser_process_that_dies_in_a_call_is_a_crash_the_model_is_tol
 async def test_a_screenshot_is_kept_for_the_model_and_the_result_holds_a_placeholder(env: Env) -> None:
     identity_id = await env.open_identity()
 
-    result = await env.run("browser_screenshot", identity_id=identity_id)
+    result = await env.run("browser_take_screenshot", identity_id=identity_id)
 
     assert result == PNG_PLACEHOLDER
     assert PNG not in result and "base64" not in result
     assert [(image.mime, image.data) for image in env.images.images] == [("image/png", PNG)]
-    assert env.images.images[0].caption == f"browser_screenshot of identity {identity_id}"
+    assert env.images.images[0].caption == f"browser_take_screenshot of identity {identity_id}"
 
 
-async def test_the_png_a_click_at_returns_is_dropped_to_a_placeholder_that_says_how_to_look(env: Env) -> None:
+async def test_the_page_a_click_at_answers_with_is_shown_as_the_server_means_it(env: Env) -> None:
+    """The server answers a click at a point with the page after it, so its result is visible without a second call."""
     identity_id = await env.open_identity()
 
     result = await env.run("browser_click_at", identity_id=identity_id, x=10, y=20)
 
-    assert result == "clicked at 10,20\n[screenshot, 1x1, not stored; call browser_screenshot to see the page]"
-    assert env.images.images == ()
+    assert result == PNG_PLACEHOLDER
+    assert [(image.mime, image.caption) for image in env.images.images] == [
+        ("image/png", f"browser_click_at of identity {identity_id}")
+    ]
 
 
 async def test_a_screenshot_outside_a_model_turn_has_nowhere_to_go(bare_env: Env) -> None:
     identity_id = await bare_env.open_identity()
 
-    shot = await bare_env.run("browser_screenshot", identity_id=identity_id)
+    shot = await bare_env.run("browser_take_screenshot", identity_id=identity_id)
     desktop = await bare_env.run("computer_screenshot")
 
     for result in (shot, desktop):
@@ -569,7 +524,7 @@ async def test_the_model_sees_the_screenshot_after_the_tool_message_and_the_tran
     h = browsing([])
     identity_id = await open_one(h)
     h.provider.script[:] = [
-        calls(call("c1", "browser_screenshot", identity_id=identity_id)),
+        calls(call("c1", "browser_take_screenshot", identity_id=identity_id)),
         says("I see a page"),
     ]
 
@@ -584,7 +539,7 @@ async def test_the_model_sees_the_screenshot_after_the_tool_message_and_the_tran
     assert shown["role"] == "user"
     assert shown["content"][0] == {"type": "text", "text": f"{IMAGES_HEADER}:"}
     assert [part["image_url"]["url"] for part in image_parts(shown)] == [f"data:image/png;base64,{PNG}"]
-    assert f"browser_screenshot of identity {identity_id}" in json.dumps(shown["content"])
+    assert f"browser_take_screenshot of identity {identity_id}" in json.dumps(shown["content"])
     assert len(second["messages"]) == last_tool + 2
     # Stored: the text and the placeholder, no bytes, in the transcript or in any event.
     stored = h.messages()
@@ -593,7 +548,7 @@ async def test_the_model_sees_the_screenshot_after_the_tool_message_and_the_tran
     assert tool_message["content"] == PNG_PLACEHOLDER
     assert PNG not in json.dumps(stored) and PNG not in json.dumps(h.events())
     called = [data for data in h.events_of("tool.called")]
-    assert called[0]["tool"] == "browser_screenshot" and called[0]["permission"] == "browser.read" and called[0]["ok"] is True
+    assert called[0]["tool"] == "browser_take_screenshot" and called[0]["permission"] == "browser.read" and called[0]["ok"] is True
     assert called[0]["target"] == identity_id
 
 
@@ -602,7 +557,7 @@ async def test_a_turn_keeps_the_newest_three_images_in_one_message_and_says_what
 ) -> None:
     h = browsing([])
     identity_id = await open_one(h)
-    shots = [call(f"c{n}", "browser_screenshot", identity_id=identity_id) for n in range(1, 5)]
+    shots = [call(f"c{n}", "browser_take_screenshot", identity_id=identity_id) for n in range(1, 5)]
     h.provider.script[:] = [*(calls(shot) for shot in shots), says("done")]
 
     await h.run(chat())
@@ -621,7 +576,7 @@ async def test_a_turn_keeps_the_newest_three_images_in_one_message_and_says_what
     assert last[last.index(holders[0]) - 1]["role"] == "tool"
     assert "the newest 3 are shown; 1 earlier of this turn are dropped" in holders[0]["content"][0]["text"]
     assert [part["text"] for part in holders[0]["content"] if part.get("text", "").startswith("Image ")] == [
-        f"Image {n}: browser_screenshot of identity {identity_id}" for n in (1, 2, 3)
+        f"Image {n}: browser_take_screenshot of identity {identity_id}" for n in (1, 2, 3)
     ]
 
 
@@ -629,7 +584,7 @@ async def test_a_later_turn_replays_the_placeholder_and_no_image(browsing: Calla
     h = browsing([])
     identity_id = await open_one(h)
     h.provider.script[:] = [
-        calls(call("c1", "browser_screenshot", identity_id=identity_id)),
+        calls(call("c1", "browser_take_screenshot", identity_id=identity_id)),
         says("first answer"),
         says("second answer"),
     ]

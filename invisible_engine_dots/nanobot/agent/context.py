@@ -34,12 +34,15 @@ class ContextBuilder:
         now: datetime,
         memory_index: str = "",
         skills: Sequence[Skill] = (),
+        browser_instructions: str = "",
     ) -> None:
         """`dot_prompt` says whose Dot this is and what it is for (projection.py).
 
         `memory_notes` are the names of the most recently changed notes in `memory_dir`, `memory_index` the
         text of its MEMORY.md (what the Dot always knows); `skills` are the Dot's
         skills (nanobot/dots/skills.py), named in the prompt with their descriptions and paths.
+        `browser_instructions` are invisible-playwright-mcp's own, carried as an MCP host carries a server's
+        when its page tools are offered (browser_tools.INSTRUCTIONS); empty when they are not.
         """
         self.dot_prompt = dot_prompt
         self.workspace = workspace
@@ -47,6 +50,7 @@ class ContextBuilder:
         self.memory_notes = memory_notes
         self.memory_index = memory_index
         self.skills = skills
+        self.browser_instructions = browser_instructions
         self.now = now
 
     def build_system_prompt(self, *, session_summary: SessionSummary | None = None) -> str:
@@ -63,6 +67,7 @@ class ContextBuilder:
                 conversations_dir=CONVERSATIONS_DIR,
                 skills=list(self.skills),
                 dot_skills_dir=DOT_SKILLS_DIR,
+                browser_instructions=self.browser_instructions,
                 # The day, not the minute: the prompt then stays the same all day, so the provider's cache of it
                 # and its count of the prompt (prompt_count.py) hold from one turn to the next.
                 today=self.now.strftime("%Y-%m-%d (%A) %Z").strip(),

@@ -86,6 +86,9 @@ export const ENV = {
   DISPLAY: "DISPLAY",
   /** `off` stops invisible_core from reinstalling itself from the package index at a launch when its version drifts. */
   CORE_AUTOFIX: "INVISIBLE_CORE_AUTOFIX",
+  /** `1` tells invisible-playwright-mcp that the engine opens and closes its browser and offers the model the page tools
+   * only: it serves `main` alone, no tool takes `browser`, and its instructions are the page rules. */
+  HOST_MANAGED: "INVISIBLE_MCP_HOST_MANAGED",
 } as const;
 
 /** The X display the guest desktop runs on. */
