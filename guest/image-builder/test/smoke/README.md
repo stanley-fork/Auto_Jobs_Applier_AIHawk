@@ -9,7 +9,7 @@ disk lay them out. This smoke does, in one Linux container, with no QEMU:
 - the engine's Python environment is built exactly as `builder/provision.sh` builds
   it: the pinned `uv` (checked against `pins.json`), then
   `builder/build-engine-env.sh` on the hashed `builder/engine-requirements.lock`;
-- the engine's source is staged as the runtime ISO stages it (every `.py`, the `.md`
+- the engine's source is staged as the runtime ISO stages it (every `.py` and `.json`, the `.md`
   templates, the lock, `LICENSE`, `UPSTREAM.md`) and every module imports with what
   the lock installed and nothing else;
 - `dot-agentd`, built from the same tree, and the engine run under their two users

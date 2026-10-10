@@ -12,7 +12,7 @@
 #                 engine lock (the script provision.sh runs), after the same
 #                 packages and the same uv the builder VM has
 #   runtime disk: the engine's source at /opt/invisible-dots/engine, the files
-#                 runtime.ts stages (every .py, the .md templates, the lock,
+#                 runtime.ts stages (every .py and .json, the .md templates, the lock,
 #                 LICENSE, UPSTREAM.md), world-readable as on the ISO
 # The browser suite builds one more thing, as the golden image does it: the apt packages of
 # pins.json (the desktop, Firefox's libraries, ImageMagick) and the Dot's browser
@@ -57,7 +57,7 @@ bash "$builder/build-engine-env.sh" "$builder/engine-requirements.lock" /opt/inv
 
 # The runtime disk's files, at the paths the ISO has them (it carries no __pycache__, no tests).
 mkdir -p /opt/invisible-dots/engine
-(cd "$engine_src" && find nanobot \( -name '*.py' -o -path 'nanobot/templates/*.md' \) -type f -exec cp --parents {} /opt/invisible-dots/engine/ \;)
+(cd "$engine_src" && find nanobot \( -name '*.py' -o -name '*.json' -o -path 'nanobot/templates/*.md' \) -type f -exec cp --parents {} /opt/invisible-dots/engine/ \;)
 cp "$builder/engine-requirements.lock" /opt/invisible-dots/engine/requirements.lock
 cp "$engine_src/LICENSE" "$engine_src/UPSTREAM.md" /opt/invisible-dots/engine/
 chmod -R a+rX,go-w /opt/invisible-dots

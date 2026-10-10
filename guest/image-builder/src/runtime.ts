@@ -8,7 +8,7 @@
  *   /bin/dot-agentd              the computer daemon (linux/amd64)
  *   /bin/dot-desktop             ExecStart of dot-desktop.service
  *   /bin/dot-install             the package installer dot may run with sudo
- *   /engine/nanobot/...          the engine's source: its .py files and templates
+ *   /engine/nanobot/...          the engine's source: its .py files, templates and data (.json)
  *   /engine/skills/<name>/SKILL.md   the built-in skills the prompt names and the Dot reads
  *   /engine/LICENSE, /engine/UPSTREAM.md   the engine's license and where it was forked from
  *   /units/*.service             the guest systemd units
@@ -137,7 +137,8 @@ async function stageFile(path: string, hostFile: string): Promise<StagedFile> {
 
 /**
  * What the engine's package ships (the wheel's include list in its
- * pyproject.toml): every .py file, and the .md templates. The tests and
+ * pyproject.toml): every .py file, the .md templates, and the .json data (the browser server's capture,
+ * nanobot/dots/invisible_playwright_mcp.json, which the engine reads at start). The tests and
  * __pycache__ are not part of it.
  */
 async function engineSourcePaths(root: string, relative: string, out: string[]): Promise<void> {
@@ -147,7 +148,7 @@ async function engineSourcePaths(root: string, relative: string, out: string[]):
     if (entry.isDirectory()) {
       if (entry.name !== "__pycache__") await engineSourcePaths(root, path, out);
     } else if (entry.isFile()) {
-      if (entry.name.endsWith(".py") || (entry.name.endsWith(".md") && path.startsWith("nanobot/templates/"))) out.push(path);
+      if (entry.name.endsWith(".py") || entry.name.endsWith(".json") || (entry.name.endsWith(".md") && path.startsWith("nanobot/templates/"))) out.push(path);
     } else {
       throw new Error(`${join(root, path)} is neither a file nor a directory; the engine's source must hold only plain files`);
     }
