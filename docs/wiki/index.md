@@ -34,3 +34,6 @@ is how it is built.
 - [Browser calls that lead nowhere](browser-calls-that-lead-nowhere.md):
   45 tasks call by call: addresses from memory, timeouts, and three tools that
   never worked.
+- [The browser server's own tools and words](the-browser-servers-own-words.md):
+  the page tools and instructions of invisible-playwright-mcp, offered as an MCP
+  host offers them.

@@ -17,3 +17,4 @@ produced the numbers are in the repository, under `tests/bench/` and
 - [Compacting a thread at the model's own window](compacting-at-the-models-window.md)
 - [Benchmarking an agent on real VMs](benchmarking-agents-on-real-vms.md)
 - [Browser calls that lead nowhere](browser-calls-that-lead-nowhere.md)
+- [The browser server's own tools and words](the-browser-servers-own-words.md)

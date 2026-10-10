@@ -71,14 +71,20 @@ happen.
   usable results: DuckDuckGo's HTML version wraps its links in a redirect,
   and Bing gave an empty results area.
 - **Back, forward and reload** removed, as above.
-- **`browser_read_text` takes a CSS selector**, and its description says so:
-  the server reads with `document.querySelector`, so a snapshot selector in
-  Playwright's own syntax (`:nth-match(...)`, `text=...`) fails there.
-- **A consent dialog is answered first.** The skill says to click one of its
-  buttons when the snapshot shows one. On the same Google task, run once
-  with the old skill and once with the new one on a fresh Dot, both answered
-  the dialog before clicking. So this run shows no gain; the rule is for the four
-  clicks above.
+- **`browser_read_text` reads what the other tools find.** It resolved its
+  selector with `document.querySelector`, so a snapshot selector in Playwright's
+  own syntax (`:nth-match(...)`) or a field inside a shadow root failed there
+  while the same string clicked. invisible-playwright-mcp 0.71.0 resolves it
+  through the engine, as it already did for the diagnosis of a failed click.
+- **A consent dialog is answered first.** The rule is now in the browser
+  server's own instructions. On the same Google task, run once with the old
+  rules and once with the new ones on a fresh Dot, both answered the dialog
+  before clicking. So this run shows no gain; the rule is for the four clicks
+  above.
+
+These rules, and the rest of what a page needs, are now written once, in
+the browser server: see
+[The browser server's own tools and words](the-browser-servers-own-words.md).
 
 ## What was not changed, and why
 
