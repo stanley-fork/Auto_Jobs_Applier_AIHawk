@@ -631,6 +631,22 @@ provider of the next turn; a running turn keeps the one it began with. The
 engine reads no credential from its environment: no provider spec names an
 environment variable.
 
+The secrets of the MCP servers a Dot declares (section 7) travel the same
+way: stored encrypted under the Dot's scope as `mcp/<server>/<NAME>`, set and
+cleared write-only (section 9.6), pushed in the same `POST /secrets` as the key
+(`mcp_secrets`, by server and name, only those the config names), held in
+memory by `McpSecrets` (`nanobot/dots/secrets.py`) and masked in the
+conversation files. Unlike the key, a secret leaves the engine for the server
+that names it, because that is what it is for, as in every MCP host: a
+command's secret is an environment variable of its process, which the relay
+receives in its own environment (only its name is on the relay's command line,
+`--env-from`), and a URL's is a header of its requests. Its value is printable
+ASCII, a space allowed (`Bearer <token>`): one rule, `MCP_SECRET_PATTERN` and
+`MCP_SECRET_RULE` in `packages/shared`, applied by the host where it enters and
+by the engine on `POST /secrets`. A config that no longer names a secret (its
+server removed, its name dropped) deletes its value in the same transaction, so
+none is kept that nothing uses.
+
 A secret also never travels in an error: a failed push of the key is reported
 by route, status and code only (`the guest did not take the OpenRouter key
 (status 502, ...)`), never with the text the guest or a proxy answered, which
@@ -725,7 +741,7 @@ command detached into another session outlives it.
 | method and path | body | answer |
 |---|---|---|
 | `GET /health` | | `{ status: "ok"\|"starting", state: AgentState, openrouter_configured: bool, browser: { identities: n, open: n }, checks }`; `identities` is the number of rows and `open` the number of identities with a live browser |
-| `POST /secrets` | `{ openrouter_api_key }` | `204` |
+| `POST /secrets` | `{ openrouter_api_key, mcp_secrets }`; `mcp_secrets` is `{ <server>: { <NAME>: value } }`, the secrets of the config's MCP servers that are set | `204`; `400 invalid_secret` holds neither, and never says a value |
 | `PUT /config` | `DotRuntimeConfig` (section 7) | `204`, validated, persisted in the engine's database (`dots_kv`) and projected onto the engine's settings in process (section 8.8); a config that does not validate is `400 invalid_config` |
 | `POST /events` | `InboundEvent` | `202 { accepted: true }` |
 | `GET /events/stream` | `?after=<seq>` | `text/event-stream`, one SSE message per outbound event, `id: <seq>` |
@@ -736,7 +752,7 @@ command detached into another session outlives it.
 | `DELETE /browser-identities/:id` | | `204` after the identity's browser is closed and its directory removed; `404 not_found` |
 | `GET /browser-identities/:id/frame` | | `200 image/jpeg` (`Cache-Control: no-store`), one frame of the identity's window, taken with the server's `browser_watch`; `404 not_found`; `409 not_open` when the identity is closed; `503 busy` when a call of the Dot held the identity for longer than 5 seconds; `502 frame_failed` (the server has no page to show, or sent a frame that is not a JPEG: the engine is the one owner of that rule, the host passes the bytes on as `image/jpeg`) or `crashed` |
 | `POST /browser-identities/:id/close` | | `204` after the identity's browser is closed through `browser_close` and its server has ended; the profile stays. Closing a closed identity is a `204` too; `404 not_found` |
-| `GET /tools` | | `{ tools: [{ name, permission, offered, description }] }`: the engine's tool table (section 8.8) in its order; `offered` is whether the model is offered the tool now (its permission is not `deny`, and a tool that creates or deletes a browser identity needs the Dot to manage its identities; before the first config, none); `description` is the one in the tool's schema |
+| `GET /tools` | | `{ tools: [{ name, permission, offered, description }], mcp_servers: [{ name, state, error, tools }] }`: the engine's tool table (section 8.8) in its order, then the tools of the declared MCP servers that are connected (permission `mcp.<server>`); `offered` is whether the model is offered the tool now (its permission is not `deny`, and a tool that creates or deletes a browser identity needs the Dot to manage its identities; before the first config, none); `description` is the one in the tool's schema. `mcp_servers` is every declared server by name, `state` `connecting`, `connected` or `failed`, `error` why it failed (section 8.3) |
 | `GET /skills` | | `{ skills: [{ name, description, source, path, content }] }`: the Dot's skills (section 8.6) by name, the built-in ones and its own (`source` is `builtin` or `dot`), each with the whole of its SKILL.md |
 | `POST /prepare-sleep` | | `204` after the state is flushed and browser sessions are closed; the agent then starts no new work. A model request in flight is abandoned; a tool in flight gets up to 20 seconds to finish and record its result, then is aborted (section 8.7). A `POST /secrets` (the READY procedure of a VM whose stop failed, so no shutdown followed) lifts that, and so does a new inbound event |
 
@@ -1093,6 +1109,17 @@ permissions:                           # allow | ask | deny, keyed by permission
 limits:
   max_steps_per_task: 60               # model turns before a task is failed
   max_cost_per_task_usd: 1.00          # USD of model spend of a task or a chat turn, 0.01..100; the last request may exceed it (section 8.2)
+mcp_servers:                           # optional: MCP servers whose tools the Dot may use, by name
+  time:                                # [a-z0-9-], 1..32, starting with a letter or a digit
+    command: uvx                       # run on the Dot's computer, as dot, in its home
+    args: [mcp-server-time]
+    env: {LOG_LEVEL: warning}          # optional: environment written here
+    secrets: [TIME_API_KEY]            # optional: environment variables whose values are secrets (section 9.6)
+    timeout_s: 120                     # optional: the longest one call may take, 1..600
+  search:
+    url: https://search.example/mcp    # streamable HTTP, or SSE for a URL ending in /sse
+    headers: {X-Client: dots}          # optional
+    secrets: [Authorization]           # optional: headers whose values are secrets
 ```
 
 A Dot has no goal: what it is for is what its person asks of it, in the chat, in a task or in its
@@ -1134,6 +1161,30 @@ minus `computer`, with `permissions` resolved by the host: one decision for
 every permission the registry knows, defaults applied. The guest applies the
 map as it is and denies a permission missing from it, so the defaults live in
 one place (`resolvePermission` in `packages/shared`).
+
+`mcp_servers` are the MCP servers the person lets the Dot use, declared the way
+Claude Code (`.mcp.json`), Codex (`[mcp_servers]`) and nanobot declare them: a
+`command` with its `args` and `env`, or a `url` with its `headers`. Only the
+person declares one; the Dot can install the program a server needs (section
+4.2), as it installs anything, but it cannot add a server to its own config,
+which would let it give itself tools. A server's name is the prefix of its tools
+as the model sees them, `mcp_<server>_<tool>` (nanobot's naming), so it holds no
+`_` and the engine reads the server back from a tool's name. `secrets` names the
+environment variables (of a command) or headers (of a URL) whose values are
+secrets: they are set apart from the config, write-only (section 9.6), never in
+it, so the config can be shown, exported and edited as YAML. A secret named twice,
+or named as a value the entry also writes, is refused.
+
+Each declared server has a permission, `mcp.<server>`, that covers all of its
+tools: what a server's tool does is that server's to say, which the host cannot
+know, so a server is one decision, as it is in Claude Code's permission rules
+(`mcp__<server>`), and it asks by default. Its risk is `high`, as running
+commands is. A permission of a server the config does not declare is refused,
+and `resolvePermission` denies it. `MCP_SERVER_NAME_PATTERN` and
+`MCP_TIMEOUT_BOUNDS` are in `packages/shared`; the guest's `protocol.py` keeps a
+copy of the name rule. The servers are listed by name everywhere (the status,
+the prompt, the settings): the database keeps a config as `jsonb`, which does
+not keep the order of an object's keys.
 
 ## 8. Agent runtime
 
@@ -1253,6 +1304,44 @@ system prompt whenever a page tool is offered, as an MCP host carries a
 server's instructions. A browser action on an identity that is not open does
 not launch it, it says so (section 6). An image the server answers with is
 shown to the model and not stored (section 6).
+
+The tools of the MCP servers the person declares (`mcp_servers`, section 7)
+are not rows of the table: which they are is each server's to say, at run time.
+`nanobot/dots/mcp_servers.py` keeps one nanobot `MCPProvider` per declared
+server, on a registry of its own, as the browser has one per identity, so
+spawning, `initialize`, `tools/list`, the per-call timeout (`timeout_s`) and
+the reconnect are the client's. What is the Dot's:
+
+- where it runs. A `command` is started through `dot-agentd relay`, as the
+  user `dot`, in its home, like every program of the model: it reads and writes
+  what the Dot's commands can, and nothing of the engine's. Its `env` is passed
+  with `--env`, its secrets with `--env-from` (their names only, the values in
+  the relay's own environment), so no secret is on a command line. A `url` is
+  reached from the engine, its secrets as headers.
+- when. A server is started when it is declared, and again when a config or a
+  secret changes its entry (that server only). The next turn waits for the
+  servers being started, each for at most 60 s (`STARTUP_TIMEOUT_S`: a first
+  start through `uvx` or `npx` downloads the server). One that failed (its
+  program is not installed yet, it exited) is started again when the next turn
+  starts, so a server whose program the Dot installs works from the next
+  message. One whose secret is not set is not started until the person sets it.
+- why it is not connected. The client says why a connection failed, and a
+  command's standard error is drained into a pipe of the engine, of which the
+  last 2000 characters are kept: the error a person and the model read is what
+  the server wrote (`npx: not found`, `the API key is missing`), with the
+  server's secrets masked.
+- what the model gets. Each tool of a connected server, under the client's name
+  `mcp_<server>_<tool>`, is offered while the permission `mcp.<server>` is
+  `allow` or `ask`, and the gate decides each call by it (section 8.4). The
+  system prompt has a section for those servers: each one's instructions (what
+  it said at `initialize`, cut at 2048 characters as Claude Code cuts them), or
+  why it is not connected and that it is started again at the next turn. An
+  image a tool answers with is shown to the model as the browser's are. A call
+  shows no target in `tool.called`, and an approval shows all its arguments.
+
+`GET /tools` lists those tools after the table's, each under its server's
+permission, and every declared server with its state: `connecting`,
+`connected` (with how many tools) or `failed` (with why).
 
 The tool calls of one response run one at a time, in the order the model
 gave them. Only the response's `tool_calls` count: a call written in the
@@ -1620,9 +1709,19 @@ other engine owns the state.
   decides every call by the same table. The table also says which arguments
   of a call an `approval.requested` may carry (all of them, but for the proxy
   of `browser_identity_create`).
-  The engine has no MCP server of its own to configure: the one server it runs
-  is `invisible-playwright-mcp`, and only through the `BrowserManager`, on a
-  registry no turn sees.
+  The browser's server, `invisible-playwright-mcp`, runs only through the
+  `BrowserManager`, on registries no turn sees. The servers the person
+  declares (`mcp_servers`) are `McpServers`' (`nanobot/dots/mcp_servers.py`,
+  section 8.3): it registers each connected server's tools on the Dot's
+  registry as `McpServerTool`s, which call the client's wrapper of the
+  server's own registry at call time, and the permission table maps a tool
+  named `mcp_<server>_<tool>` to `mcp.<server>` (`tool_permission`). The
+  projection keeps the servers whose permission is not `deny`
+  (`EngineSettings.mcp_servers`); a turn first awaits `McpServers.ready()`,
+  then offers the table's tools and those servers' tools, and the prompt
+  carries what each said at `initialize` or why it is not connected. The fork's
+  MCP client keeps a server's instructions, says why a connection failed, and
+  takes a stdio server's standard error (`UPSTREAM.md`).
 - Browser identities. `BrowserManager` (`nanobot/dots/browser.py`) owns the
   identities (their rows in `dots_browser_identities`, their directories under
   `/home/dot/browsers` and their servers' homes under `/var/lib/invisible-dots/mcp`,
@@ -2000,7 +2099,10 @@ POST   /api/approvals/:id/reject     body: { note? }
 GET    /api/dots/:id/events          ?after=<id>&before=<id>&limit=&types=<a,b>&tools=<a,b>&task_id=&order=asc|desc   `types` are event type names (an unknown one is a 400), `tools` narrows `tool.called` to those tools (`data.tool`) and leaves other types alone, `task_id` keeps the events whose `data.task_id` it is, `order=desc` is the newest first so that a `limit` keeps the newest, and `before` (the id of the oldest event of the previous page, desc only) goes on, older, from there
 GET    /api/dots/:id/files/list      ?path=   { path, entries: [{ name, type, size, mtime }] }: a directory under /home/dot (home when omitted)
 GET    /api/dots/:id/files           ?path=   the bytes of a file under /home/dot, at most 16 MiB (413 `file_too_large`)
-GET    /api/dots/:id/tools           { tools: [{ name, permission, offered, description }] }: the engine's tool table and what the model is offered now; needs the computer running
+GET    /api/dots/:id/tools           { tools: [{ name, permission, offered, description }], mcp_servers: [{ name, state, error, tools }] }: the engine's tool table and what the model is offered now, and where each declared MCP server is; needs the computer running
+GET    /api/dots/:id/mcp-secrets     { dot_id, secrets: [{ server, name, set }] }: every secret the config's MCP servers name, and whether it is set; never a value
+PUT    /api/dots/:id/mcp-secrets/:server/:name   body: { value }   sets it (404 for a secret the config does not name, 400 for a value that breaks MCP_SECRET_RULE) and pushes the secrets to a running guest, which starts the server again with it
+DELETE /api/dots/:id/mcp-secrets/:server/:name   clears it
 GET    /api/dots/:id/skills          { skills: [{ name, description, source, path, content }] }: the Dot's skills (section 8.6); needs the computer running
 GET    /api/dots/:id/usage           ?since=<ISO 8601 timestamp>   { dot_id, since, spent_usd }
 GET    /api/stream                   SSE: every event, ?dot_id= to filter
@@ -2645,7 +2747,7 @@ then each code as a QR for the terminal until the number is linked, then
 
 ## 10. Out of scope for this version
 
-Snapshots and rollback, MCP integrations beyond the browser, remote desktop
+Snapshots and rollback, remote desktop
 and interactive terminal, artifacts, backups, quotas, network policies,
 multiple hosts, organisations and RBAC, macOS hosts. The tables and states
 above leave room for them; nothing here pretends to implement them.

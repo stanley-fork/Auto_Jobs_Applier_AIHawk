@@ -218,6 +218,9 @@ Its tools, each behind a permission
   and https only), read the page, take screenshots, click, type, select,
   scroll, go back and forward.
 - **Look at its desktop** with a screenshot.
+- **Use the MCP servers you give it**: a program on its computer or a URL, each
+  one declared in its settings, with its own permission (asked by default). See
+  [MCP servers](#mcp-servers).
 - **Schedule itself**: add, list and remove its own automations (at a time,
   every interval, or a cron expression). This one asks you first by default;
   to pause or remove one, ask the Dot.
@@ -331,6 +334,8 @@ while you have stopped it.
 | `invisible-dots reject <id> [--note text]` | refuse it; the model is told no |
 | `invisible-dots computer <dot> start\|stop\|reboot` | power its computer on or off by hand |
 | `invisible-dots browser <dot> identities` | its browser identities |
+| `invisible-dots mcp <dot>` | its MCP servers: where each is, and which secrets are set |
+| `invisible-dots secret mcp --dot <dot> <server> <NAME> [--clear]` | set a secret of one of its MCP servers, asked for like the key |
 | `invisible-dots channel list [--dot <dot>]` | linked chats and who is paired |
 | `invisible-dots channel remove telegram\|whatsapp --dot <dot>` | unlink a chat; its token or keys and paired people are deleted |
 | `invisible-dots secret openrouter --dot <dot>` | a key for one Dot instead of the global one |
@@ -391,6 +396,34 @@ How well the browser holds up against bot checks is measured in
 on the suites it names. invisible_dots adds no claim of its own: a site can
 still refuse a Dot for what it does, and the terms of the sites you point it at
 still apply.
+
+## MCP servers
+
+A Dot uses the tools of any MCP server you declare, the way Claude Code and
+Codex do: in its settings (MCP servers), or in its YAML.
+
+```yaml
+mcp_servers:
+  time:
+    command: uvx                 # runs on the Dot's computer, as the Dot's user
+    args: [mcp-server-time]
+  search:
+    url: https://search.example/mcp
+    secrets: [Authorization]     # its value is set apart, never in the YAML
+```
+
+A server's tools are named `mcp_<server>_<tool>`, and one permission covers
+them all, `mcp.<server>`, which asks you before each call until you allow it
+(or "Always allow" an approval). A secret, an API key or a token, is set in the
+settings next to its server or with
+`invisible-dots secret mcp --dot <dot> <server> <NAME>` (asked for like the
+key; `--clear` removes it): it reaches the server as an environment variable or
+a header, never through the YAML or a command line.
+
+Only you add a server. The Dot can install the program one needs: `uvx` is
+there; for `npx`, it runs `sudo dot-install nodejs npm`. A server that cannot
+start says why, in its settings, in `invisible-dots mcp <dot>` and to the Dot
+itself, and it is started again when the Dot's next message or task begins.
 
 ## Talk to it from your phone
 
@@ -621,13 +654,13 @@ inside their VMs.
 ## Configuration
 
 A Dot is one YAML file, checked by one schema: name, instructions,
-model, computer (cpu, memory, disk, idle timeout), permissions and
-limits. Every field and its range is in
+model, computer (cpu, memory, disk, idle timeout), permissions, limits and MCP
+servers. Every field and its range is in
 [architecture: Dot configuration](architecture.md#7-dot-configuration);
 `invisible-dots init` writes a sample.
 
 One server runs per data directory. Secrets (the OpenRouter key, channel
-tokens, WhatsApp keys) are stored with AES-256-GCM under
+tokens, WhatsApp keys, MCP servers' secrets) are stored with AES-256-GCM under
 `config/master.key`; anyone who can read the data directory can decrypt them,
 so it is kept private to your user.
 
@@ -706,7 +739,7 @@ Alpha. Nothing is released yet; the golden image is the one thing published.
 - **Channels carry text only**, one Telegram bot per Dot; the official
   WhatsApp Cloud API is a later adapter on the same hub.
 - **Not in this version**: snapshots and rollback, backups, quotas, network
-  policies, MCP integrations beyond the browser, controlling the desktop or an
+  policies, controlling the desktop or an
   interactive terminal for you (the web UI shows the desktop as pictures, and
   nothing you do there reaches the computer), artifacts, several hosts,
   organisations and roles, macOS hosts

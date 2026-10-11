@@ -60,6 +60,7 @@ Anything that needs a computer and a person's judgement, for as long as it takes
 | **[A computer of its own](docs/guide.md#what-a-dot-can-do)** | A hardware-accelerated VM with a Linux desktop and a persistent disk. It sleeps when idle and wakes for the next message, task or automation. |
 | **[A browser that is not blocked](docs/guide.md#the-browser)** | [invisible_playwright_mcp](https://github.com/feder-cr/invisible_playwright_mcp): Firefox patched in C++, the fingerprint set inside the engine. Each identity keeps its own cookies and logins. |
 | **[Memory and skills](docs/guide.md#what-a-dot-can-do)** | It writes its own notes and how-tos in its home folder, as Claude Code does, and reads them on the next task. |
+| **[Your MCP servers](docs/guide.md#mcp-servers)** | Any MCP server you declare, a program on its computer or a URL, as in Claude Code. Its keys stay out of the config. |
 | **[Permissions you set](docs/guide.md#approvals)** | Every tool belongs to a permission: allow, ask or deny. An ask waits in your Inbox, survives a restart and runs the call once. |
 | **[Tasks and automations](docs/guide.md#the-web-ui)** | A queue with priorities and start times, and its own recurring jobs, for which its computer is started on time. |
 | **[Many ways to reach it](docs/guide.md#talk-to-it-from-your-phone)** | Web UI, command line, HTTP API with live events, Telegram, and WhatsApp as an opt-in. |
