@@ -469,9 +469,9 @@ invisible-core==39.35.0 \
 invisible-playwright==0.32.0 \
     --hash=sha256:9c9884015bda2e4a197a3247728d4b1df461cbbea1c9debc2431af126d60417b \
     --hash=sha256:d83bf71f4918275107b80c21419a26d6b56df2183befae91cc19119a26590d09
-invisible-playwright-mcp==0.71.0 \
-    --hash=sha256:12c58d1f33202804bebcf2155e95cb2917da5c33074f5e8bc195d54cd6325843 \
-    --hash=sha256:7c699fc6b52c3a5bb27bf23ede7d70e2c6e41b61aa22decdb0c7dd1bf4b14024
+invisible-playwright-mcp==0.71.1 \
+    --hash=sha256:8847784c83cb4b982a442181cc3489aaebb0a04739f511c26bdeaf649d32df93 \
+    --hash=sha256:9c5cf6fe3a739839cb81525968b29b7e486d48da0a2532a43825cb590254fcb2
 jiter==0.17.0 \
     --hash=sha256:00b5a98df3e3a3e8cf7b619f4ac2f8bf975bbf3d95d02c5d17b8dbfe5c8b8245 \
     --hash=sha256:00d783a779c5664e16dbad5e3a3c3a75e128b07dd5f4765159658d9210a50ca5 \

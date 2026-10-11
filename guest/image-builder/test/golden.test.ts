@@ -131,7 +131,7 @@ describe("buildGoldenImage", () => {
       base: { sha256: sha256(BASE), serial: "20260926" },
       pinned: {
         uv: { version: "0.12.22", sha256: sha256(UV) },
-        "invisible-playwright-mcp": "0.71.0",
+        "invisible-playwright-mcp": "0.71.1",
         "invisible-playwright": "0.32.0",
         apt_packages: ["xvfb", "imagemagick"],
       },
