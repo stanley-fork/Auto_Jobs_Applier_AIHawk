@@ -445,6 +445,8 @@ check "GET /tools names the permission each tool exercises" "api $A/tools | jq -
 # --- the MCP servers the person declares (architecture 8.3): through the image's relay, as dot, a secret by the
 # relay's environment; one whose program is not installed says why ---
 MCP_SECRET=smoke-mcp-secret-7
+# The secret as a pattern that does not match its own text, so a grep for it never finds its own command line.
+MCP_SECRET_SEEN='smoke-mcp-[s]ecret-7'
 echo '{"computer.exec":"allow","mcp.tools":"allow","mcp.missing":"ask"}' > /tmp/perms.json
 echo '{"tools":{"command":"'"$FAKE_TOOLS"'","env":{"MODE":"smoke"},"secrets":["TOKEN"],"timeout_s":30,"startup_timeout_s":30},"missing":{"command":"/usr/local/bin/not-installed","timeout_s":30,"startup_timeout_s":30}}' > /tmp/mcp.json
 echo '{"tools":{"TOKEN":"'"$MCP_SECRET"'"}}' > /tmp/mcp-secrets.json
@@ -455,7 +457,7 @@ check "GET /tools: the declared server connects through the relay, with its tool
 check "GET /tools: the server whose program is not installed is failed, saying what the relay found" "wait_mcp_state missing failed && api $A/tools | jq -e '.mcp_servers[]|select(.name==\"missing\")|.error|test(\"not-installed\")' >/dev/null"
 # A process's environment is its own user's to read: dot reads the server's, as a command of the model would.
 server_env_of_dot() { su -s /bin/bash dot -c 'for p in $(pgrep -u dot -f fake_tool_server.py); do tr "\\0" "\\n" < /proc/$p/environ; done'; }
-check "the declared server runs as dot, its secret in its environment and on no command line" "pgrep -u dot -f fake_tool_server.py >/dev/null && server_env_of_dot | grep -qx 'TOKEN=$MCP_SECRET' && ! cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q '$MCP_SECRET'"
+check "the declared server runs as dot, its secret in its environment and on no command line" "pgrep -u dot -f fake_tool_server.py >/dev/null && server_env_of_dot | grep -qx 'TOKEN=$MCP_SECRET' && ! cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q '$MCP_SECRET_SEEN'"
 ev msg-mcp user.message '{"text":"RUN-TOOL mcp_tools_env {\"name\":\"MODE\"}"}' >/dev/null
 check "a call of the server's tool runs under mcp.tools and answers with the server's environment" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"mcp_tools_env\" and .data.ok==true and .data.permission==\"mcp.tools\"' && wait_event $STREAM '.type==\"message.assistant\" and .data.in_reply_to==\"msg-mcp\" and (.data.text|test(\"smoke\"))'"
 check "the prompt of that turn carries the server's instructions, and why the other is not connected" "grep -F 'RUN-TOOL mcp_tools_env' /tmp/fake-full.jsonl | grep -F 'Call echo to repeat a text.' | grep -q 'missing.nNot connected: '"

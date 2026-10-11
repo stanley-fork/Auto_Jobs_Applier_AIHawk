@@ -944,7 +944,9 @@ async function main(): Promise<void> {
     // The secret is in the server's environment, which only its own user reads, and on no command line.
     const environ = await guestExec(dotId, `for p in $(pgrep -u dot -f mcp-server-time); do tr '\\0' '\\n' < /proc/$p/environ; done | grep -c '^TIME_TOKEN=${MCP_SECRET}$' || true`);
     assert(Number(environ.stdout.trim()) >= 1, "no mcp-server-time process holds TIME_TOKEN in its environment");
-    const cmdlines = await guestExec(dotId, `cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -c '${MCP_SECRET}' || true`);
+    // The secret as a pattern that does not match its own text: the command line of this very grep must not count.
+    const seen = `[${MCP_SECRET[0]}]${MCP_SECRET.slice(1)}`;
+    const cmdlines = await guestExec(dotId, `cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -c '${seen}' || true`);
     assert(cmdlines.stdout.trim() === "0", "the secret is on a command line");
     return `time connected with ${server.tools} tools, its tool asked under mcp.time and ran once always allowed (${String(call.data.target ?? "no target")}); keyed waited for TIME_TOKEN, then connected with ${started.tools} tools once it was set through the CLI; the secret is in its environment and on no command line`;
   });
