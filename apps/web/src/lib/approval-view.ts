@@ -5,7 +5,16 @@
  * The arguments come from the engine's table (`tool_arguments` in nanobot/dots/permissions.py): all of a call's
  * arguments, bar a secret the table redacts. So what is shown here is what the call will do, not a summary of it.
  */
-import { GUEST_PATHS, isPermission, PERMISSION_INFO, type Permission, type PermissionInfo, type PermissionRisk, type ToolInfo } from "@invisible-dots/shared/browser";
+import {
+  GUEST_PATHS,
+  isPermissionName,
+  mcpServerOf,
+  permissionInfo as sharedPermissionInfo,
+  type PermissionInfo,
+  type PermissionName,
+  type PermissionRisk,
+  type ToolInfo,
+} from "@invisible-dots/shared/browser";
 import { additionDiff, replacementDiff, type DiffLine } from "./diff";
 import { toolLabel } from "./events/tool-labels";
 import { formatDate } from "./format";
@@ -79,16 +88,19 @@ function changedPaths(ask: ApprovalAsk): string[] {
 
 /**
  * Whether answering "allow" here is the kind of answer to stop and think about: a command, the deletion of a browser
- * identity (its logins with it), or a change to a file outside the workspace.
+ * identity (its logins with it), a change to a file outside the workspace, or a tool of an MCP server, which does
+ * whatever that server does.
  */
 export function isDestructive(ask: ApprovalAsk): boolean {
   if (ask.permission === "computer.exec" || ask.permission === "browser.identity.delete") return true;
+  if (mcpServerOf(ask.permission) !== null) return true;
   return ask.permission === "files.write" && changedPaths(ask).some(outsideWorkspace);
 }
 
 /** The words for a permission: its name and what it lets the Dot do; null for one a Dot's config can no longer name. */
-export function permissionInfo(permission: string): (PermissionInfo & { permission: Permission }) | null {
-  return isPermission(permission) ? { ...PERMISSION_INFO[permission], permission } : null;
+export function permissionInfo(permission: string): (PermissionInfo & { permission: PermissionName }) | null {
+  const info = sharedPermissionInfo(permission);
+  return info !== null && isPermissionName(permission) ? { ...info, permission } : null;
 }
 
 export const RISK_LABEL: Record<PermissionRisk, string> = { low: "Low risk", medium: "Medium risk", high: "High risk" };

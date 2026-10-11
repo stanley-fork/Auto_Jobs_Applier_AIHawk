@@ -38,6 +38,7 @@ import {
   type ProofAnswer,
   type RefusedEvent,
   type SystemAnswer,
+  type SecretsRequest,
   type SkillListAnswer,
   type ToolListAnswer,
 } from "@invisible-dots/shared";
@@ -307,12 +308,8 @@ export class GuestClient {
     return this.json({ path: this.agentPath(AGENT_ROUTES.health) });
   }
 
-  pushSecrets(openrouterApiKey: string): Promise<void> {
-    return this.noContent({
-      method: "POST",
-      path: this.agentPath(AGENT_ROUTES.secrets),
-      body: { openrouter_api_key: openrouterApiKey },
-    });
+  pushSecrets(secrets: SecretsRequest): Promise<void> {
+    return this.noContent({ method: "POST", path: this.agentPath(AGENT_ROUTES.secrets), body: secrets });
   }
 
   putConfig(config: DotRuntimeConfig): Promise<void> {

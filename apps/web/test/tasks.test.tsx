@@ -144,9 +144,11 @@ describe("the Tasks page", () => {
     // A task that arrives is read with the newest page again, and the older ones stay.
     plane.tasks.push(taskRecord("q999", { created_at: new Date().toISOString() }));
     act(() => plane.push("d1", "task.created", { task_id: "q999" }));
-    await waitFor(() => expect(screen.getByText("task q999")).toBeTruthy());
+    // Waited for by the list's length, as above: a page-wide text query over two hundred cards, repeated every 50 ms,
+    // used up waitFor's second on a loaded machine before the refresh (300 ms after the event) had drawn the list.
+    await waitFor(() => expect(queueItems()).toHaveLength(TASK_LIST_LIMIT + 6));
+    expect(screen.getByText("task q999")).toBeTruthy();
     expect(screen.getByText("task q000")).toBeTruthy();
-    expect(queueItems()).toHaveLength(TASK_LIST_LIMIT + 6);
   });
 
   it("does not offer older tasks to a Dot whose tasks fit a page", async () => {

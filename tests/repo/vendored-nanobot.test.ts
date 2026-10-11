@@ -22,6 +22,10 @@ import {
   GUEST_PATHS,
   IDENTITY_ERROR_STATUS,
   INBOUND_EVENT_TYPES,
+  MCP_SECRET_PATTERN,
+  MCP_SECRET_RULE,
+  MCP_SERVER_NAME_PATTERN,
+  MCP_SERVER_STATES,
   MODEL_ROLES,
   OPENROUTER_KEY_PATTERN,
   OPENROUTER_KEY_RULE,
@@ -124,6 +128,7 @@ describe("the vendored nanobot fork", () => {
     expect(tuple("OUTBOUND_EVENT_TYPES")).toEqual([...OUTBOUND_EVENT_TYPES]);
     expect(tuple("AGENT_STATES")).toEqual([...AGENT_STATES]);
     expect(tuple("MODEL_ROLES")).toEqual([...MODEL_ROLES]);
+    expect(tuple("MCP_SERVER_STATES")).toEqual([...MCP_SERVER_STATES]);
 
     const routesMatch = /^AGENT_ROUTES = \{([^}]*)\}/m.exec(protocol);
     expect(routesMatch, "AGENT_ROUTES").not.toBeNull();
@@ -182,6 +187,20 @@ describe("the vendored nanobot fork", () => {
     expect(secrets).toContain("raise ValueError(OPENROUTER_KEY_RULE)");
     // No second pattern of its own: that is how the two would drift.
     expect(secrets).not.toMatch(/re\.compile\("/);
+  });
+
+  it("names an MCP server and checks its secrets by the rules packages/shared names: the engine's copy", () => {
+    // The host checks a server's name and a secret's value when the person enters them, the engine again on PUT /config
+    // and POST /secrets, and a tool's server is read back from its name by the same rule.
+    const protocol = lf(readFileSync(join(fork, "nanobot/dots/protocol.py"), "utf8"));
+    expect(/^MCP_SERVER_NAME_PATTERN = "([^"]+)"/m.exec(protocol)?.[1]).toBe(MCP_SERVER_NAME_PATTERN);
+    expect(/^MCP_SECRET_PATTERN = "([^"]+)"/m.exec(protocol)?.[1]).toBe(MCP_SECRET_PATTERN);
+    expect(/^MCP_SECRET_RULE = "([^"]+)"/m.exec(protocol)?.[1]).toBe(MCP_SECRET_RULE);
+
+    const secrets = lf(readFileSync(join(fork, "nanobot/dots/secrets.py"), "utf8"));
+    expect(secrets).toContain("re.compile(MCP_SERVER_NAME_PATTERN)");
+    expect(secrets).toContain("re.compile(MCP_SECRET_PATTERN)");
+    expect(secrets).toContain("{MCP_SECRET_RULE}");
   });
 
   it("stays out of this repository's npm workspace, TypeScript project and test run", () => {

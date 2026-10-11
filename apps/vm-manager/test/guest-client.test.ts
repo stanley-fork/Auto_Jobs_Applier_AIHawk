@@ -119,7 +119,7 @@ describe("GuestClient", () => {
       }
     });
     const client = new GuestClient(port, TOKEN);
-    await client.pushSecrets("sk-or-test");
+    await client.pushSecrets({ openrouter_api_key: "sk-or-test", mcp_secrets: {} });
     await client.putConfig({ name: "n" } as never);
     expect(await client.postEvent({ id: "e1", type: "user.message", ts: "2026-10-02T10:00:00Z", data: { text: "hi" } })).toEqual({ accepted: true });
     expect((await client.state()).state).toBe("IDLE");
@@ -127,7 +127,7 @@ describe("GuestClient", () => {
     expect((await client.createBrowserIdentity({ name: "shop" })).id).toBe("shop-abc123");
     await client.deleteBrowserIdentity("shop-abc123");
     await client.prepareSleep();
-    expect(JSON.parse(seen[0]!.body)).toEqual({ openrouter_api_key: "sk-or-test" });
+    expect(JSON.parse(seen[0]!.body)).toEqual({ openrouter_api_key: "sk-or-test", mcp_secrets: {} });
     expect(seen.map((s) => s.url)).toContain("/v1/agent/browser-identities/shop-abc123");
   });
 
@@ -216,7 +216,7 @@ describe("GuestClient", () => {
     // What takes over a stale guest port after a host restart or a QEMU that died.
     const { port, seen, proofs } = await serve((_req, res) => json(res, 200, health("ok")), { impostor: true });
     const client = new GuestClient(port, TOKEN);
-    await expect(client.pushSecrets("sk-or-must-not-leak")).rejects.toMatchObject({ code: GUEST_UNPROVEN });
+    await expect(client.pushSecrets({ openrouter_api_key: "sk-or-must-not-leak", mcp_secrets: {} })).rejects.toMatchObject({ code: GUEST_UNPROVEN });
     await expect(waitForGuestHealth(client, { intervalMs: 5, timeoutMs: 5000 })).rejects.toMatchObject({ code: GUEST_UNPROVEN });
     expect(proofs.length).toBeGreaterThan(0);
     expect(proofs.every((p) => p.auth === undefined)).toBe(true);

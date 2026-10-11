@@ -13,6 +13,7 @@
           "max_cost_per_task_usd": 1
         },
         "models": {},
+        "mcp_servers": {},
         "permissions": {
           "computer.exec": "allow",
           "computer.screenshot": "allow",
@@ -45,6 +46,35 @@
         "models": {
           "summary": "test/small"
         },
+        "mcp_servers": {
+          "time": {
+            "env": {
+              "LOG_LEVEL": "warning"
+            },
+            "args": [
+              "mcp-server-time",
+              "--local-timezone",
+              "Europe/Rome"
+            ],
+            "command": "uvx",
+            "secrets": [
+              "TIME_TOKEN"
+            ],
+            "timeout_s": 120,
+            "startup_timeout_s": 60
+          },
+          "search": {
+            "url": "https://search.example/mcp",
+            "headers": {
+              "X-Client": "dots"
+            },
+            "secrets": [
+              "Authorization"
+            ],
+            "timeout_s": 30,
+            "startup_timeout_s": 60
+          }
+        },
         "permissions": {
           "computer.exec": "deny",
           "computer.screenshot": "allow",
@@ -58,9 +88,24 @@
           "browser.navigate": "allow",
           "browser.read": "allow",
           "browser.act": "allow",
-          "automations": "ask"
+          "automations": "ask",
+          "mcp.search": "ask",
+          "mcp.time": "allow"
         },
         "instructions": "Answer in one line."
+      }
+    }
+  ],
+  "secrets_requests": [
+    {
+      "openrouter_api_key": "sk-or-test",
+      "mcp_secrets": {
+        "time": {
+          "TIME_TOKEN": "tt-1"
+        },
+        "search": {
+          "Authorization": "Bearer sk-search-1"
+        }
       }
     }
   ],

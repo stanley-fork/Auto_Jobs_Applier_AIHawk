@@ -115,6 +115,8 @@ const TITLE = "Example Domain";
 const WORKSPACE = "/home/dot/workspace";
 const MEMORY_NOTE = "example-title.md";
 const BROWSERS = "/home/dot/browsers";
+/** A secret of an MCP server, set in step m through the CLI; steps n and p look for it as for the key. */
+const MCP_SECRET = `mcp-e2e-${randomBytes(12).toString("hex")}`;
 
 // The product, driven from the outside (driver.ts)
 
@@ -189,7 +191,7 @@ async function waitReply(dotId: string, messageId: string): Promise<StoredEvent>
 }
 
 /** Rewrites the Dot's config (it is pushed to the guest at once): every step names the whole config it needs. */
-async function configure(options: Pick<DotYamlOptions, "permissions"> = {}): Promise<void> {
+async function configure(options: Pick<DotYamlOptions, "permissions" | "mcpServers"> = {}): Promise<void> {
   await api("PATCH", route(ROUTES.dot, { id: state.dotId! }), { config: dotYaml({ name: DOT_NAME, model: MODEL, ...options }) });
 }
 
@@ -898,14 +900,65 @@ async function main(): Promise<void> {
     return `VM killed during exec; tool.called with interrupted: true for the call, which was not run again; the model answered ${JSON.stringify(done.summary)}`;
   });
 
-  await step("m", "the key is in none of the Dot's own files and rows", async () => {
+  await step("m", "MCP servers: one runs as dot and asks before its tool, one waits for its secret, set through the CLI", async () => {
     const dotId = state.dotId!;
-    const needle = Buffer.from(key.slice(0, 12), "utf8");
+    // mcp-server-time through uvx, which the image has: the engine starts it at the config push, from PyPI the first time.
+    const time = { command: "uvx", args: ["mcp-server-time", "--local-timezone", "Europe/Rome"] };
+    await configure({ permissions: { "mcp.time": "ask" }, mcpServers: { time, keyed: { ...time, secrets: ["TIME_TOKEN"] } } });
+    type ToolTable = { tools: { name: string; permission: string; offered: boolean }[]; mcp_servers: { name: string; state: string; error: string | null; tools: number }[] };
+    const tableRoute = `/api/dots/${dotId}/tools`;
+    const keyed = await waitFor("the keyed server to wait for its secret", 3 * MINUTE, async () => {
+      const table = await api<ToolTable>("GET", tableRoute);
+      return table.mcp_servers.find((s) => s.name === "keyed" && s.state === "failed");
+    }, 2000);
+    assert(String(keyed.error).includes("TIME_TOKEN is not set"), `the keyed server failed with ${JSON.stringify(keyed.error)}`);
+
+    // A tool of the server asks (mcp.time: ask); always allowed, the next call runs without asking.
+    const task = await queueTask("Use the time MCP server's get_current_time tool to get the current time in Asia/Tokyo, then answer with only the time as HH:MM.");
+    const approval = await waitApproval(task.id, "mcp_time_get_current_time");
+    assert(approval.permission === "mcp.time", `the approval is for ${approval.permission}`);
+    await approve(approval.id, undefined, { always: true });
+    await waitTask(task.id);
+    const all = await events(dotId);
+    const call = toolCalls(all, task.id, "mcp_time_get_current_time").find((e) => e.data.ok === true);
+    assert(call && call.data.permission === "mcp.time", `no successful mcp_time_get_current_time under mcp.time (tools: ${describeTools(all, task.id)})`);
+    const table = await api<ToolTable>("GET", tableRoute);
+    const server = table.mcp_servers.find((s) => s.name === "time");
+    assert(server?.state === "connected" && server.tools > 0, `the time server is ${JSON.stringify(server)}`);
+    assert(table.tools.some((t) => t.name === "mcp_time_get_current_time" && t.permission === "mcp.time" && t.offered), "GET tools does not list the server's tool as offered");
+    // It runs as dot, like every program of the model; only the engine's relay, which starts it, is another user's.
+    const owner = await guestExec(dotId, "ps -eo user=,args= | grep 'mcp-server-tim[e]' | grep -v 'dot-agentd relay' | awk '{print $1}' | sort -u");
+    assert(owner.stdout.trim() === "dot", `mcp-server-time runs as ${JSON.stringify(owner.stdout.trim())}, not dot`);
+
+    // The secret, from stdin through the CLI; the server starts with it.
+    const set = await cli(["secret", "mcp", "--dot", DOT_NAME, "keyed", "TIME_TOKEN", "--json"], { stdin: `${MCP_SECRET}\n` });
+    assert(set.code === 0, `invisible-dots secret mcp exited with ${set.code}: ${set.stderr.trim()}`);
+    assert(!set.stdout.includes(MCP_SECRET), "the CLI echoed the secret");
+    const started = await waitFor("the keyed server to start with its secret", 3 * MINUTE, async () => {
+      await runTask("Answer with only OK.");
+      const now = await api<ToolTable>("GET", tableRoute);
+      return now.mcp_servers.find((s) => s.name === "keyed" && s.state === "connected");
+    }, 5000);
+    const listed = await cli(["mcp", DOT_NAME]);
+    assert(listed.code === 0 && /keyed\s+connected/.test(listed.stdout), `invisible-dots mcp says: ${listed.stdout}`);
+    // The secret is in the server's environment, which only its own user reads, and on no command line.
+    const environ = await guestExec(dotId, `for p in $(pgrep -u dot -f mcp-server-time); do tr '\\0' '\\n' < /proc/$p/environ; done | grep -c '^TIME_TOKEN=${MCP_SECRET}$' || true`);
+    assert(Number(environ.stdout.trim()) >= 1, "no mcp-server-time process holds TIME_TOKEN in its environment");
+    // The secret as a pattern that does not match its own text: the command line of this very grep must not count.
+    const seen = `[${MCP_SECRET[0]}]${MCP_SECRET.slice(1)}`;
+    const cmdlines = await guestExec(dotId, `cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -c '${seen}' || true`);
+    assert(cmdlines.stdout.trim() === "0", "the secret is on a command line");
+    return `time connected with ${server.tools} tools, its tool asked under mcp.time and ran once always allowed (${String(call.data.target ?? "no target")}); keyed waited for TIME_TOKEN, then connected with ${started.tools} tools once it was set through the CLI; the secret is in its environment and on no command line`;
+  });
+
+  await step("n", "the key and the MCP secret are in none of the Dot's own files and rows", async () => {
+    const dotId = state.dotId!;
+    const needles = [Buffer.from(key.slice(0, 12), "utf8"), Buffer.from(MCP_SECRET, "utf8")];
     // The database stores large jsonb values compressed (TOAST), so a key in a long event would not show in its files
-    // (step o): the rows are read back decompressed through the API, while the Dot's approvals still exist.
+    // (step p): the rows are read back decompressed through the API, while the Dot's approvals still exist.
     const rows = [...(await events(dotId)), ...(await api<{ approvals: unknown[] }>("GET", route(ROUTES.approvals))).approvals];
-    assert(rowsHolding(rows, needle) === 0, "found in an event or approval row of the database");
-    // Stopped first, so the guest has flushed its disk and QEMU has closed its files; scanned before step n deletes them.
+    for (const needle of needles) assert(rowsHolding(rows, needle) === 0, "found in an event or approval row of the database");
+    // Stopped first, so the guest has flushed its disk and QEMU has closed its files; scanned before step o deletes them.
     await stopComputer(dotId, state.pid!);
     await copyFile(join(HOME, "vms", dotId, "serial.log"), join(LOG_DIR, "serial.log")).catch(() => undefined);
     const files = [...(await filesUnder(join(HOME, "vms", dotId))), join(HOME, "logs", `qemu-${dotId}.log`)];
@@ -914,7 +967,7 @@ async function main(): Promise<void> {
       assert(files.includes(join(HOME, "vms", dotId, name)), `vms/${dotId}/${name} is not there to be scanned`);
     }
     assert(existsSync(join(HOME, "logs", `qemu-${dotId}.log`)), `logs/qemu-${dotId}.log is not there to be scanned`);
-    const found = await filesHolding(files, needle);
+    const found = (await Promise.all(needles.map((needle) => filesHolding(files, needle)))).flat();
     // Only "found" or "not found", and where: never the key or any part of it.
     assert(found.length === 0, `found in ${found.length} file(s): ${found.join(", ")}`);
     const bytes = (await Promise.all(files.map((file) => stat(file)))).reduce((sum, s) => sum + s.size, 0);
@@ -924,7 +977,7 @@ async function main(): Promise<void> {
     );
   });
 
-  await step("n", "delete the Dot", async () => {
+  await step("o", "delete the Dot", async () => {
     const dotId = state.dotId!;
     const pid = state.pid!;
     await api("DELETE", route(ROUTES.dot, { id: dotId }));
@@ -935,11 +988,11 @@ async function main(): Promise<void> {
     return `pid ${pid} gone, vms/${dotId} removed`;
   });
 
-  await step("o", "the key appears in no log and no database file", async () => {
-    const needle = Buffer.from(key.slice(0, 12), "utf8");
+  await step("p", "the key and the MCP secret appear in no log and no database file", async () => {
+    const needles = [Buffer.from(key.slice(0, 12), "utf8"), Buffer.from(MCP_SECRET, "utf8")];
     // Events outlive their Dot: read back once more, decompressed, after the delete.
     const rows = await events(state.dotId!);
-    assert(rowsHolding(rows, needle) === 0, "found in an event row of the database");
+    for (const needle of needles) assert(rowsHolding(rows, needle) === 0, "found in an event row of the database");
     await stopServer();
     const scanned = [
       ...(await filesUnder(LOG_DIR)),
@@ -947,7 +1000,7 @@ async function main(): Promise<void> {
       // The embedded database's files, for whatever is stored uncompressed.
       ...(await filesUnder(join(HOME, "db"))),
     ];
-    const found = await filesHolding(scanned, needle);
+    const found = (await Promise.all(needles.map((needle) => filesHolding(scanned, needle)))).flat();
     // Only "found" or "not found", and where: never the key or any part of it.
     assert(found.length === 0, `found in ${found.length} file(s): ${found.join(", ")}`);
     return `not found in ${rows.length} event rows, nor in ${scanned.length} files (run logs, ${join(HOME, "logs")}, db)`;

@@ -89,6 +89,11 @@ install -D -m 0644 "$ENGINE_TESTS/../nanobot/dots/invisible_playwright_mcp.json"
 FAKE_MCP=/usr/local/lib/smoke-fake/invisible-playwright-mcp
 printf '#!/bin/sh\nexec /opt/invisible-dots-engine/bin/python -I -B %s/fakes/fake_mcp_server.py "$@"\n' "$FAKE_MCP_DIR" > "$FAKE_MCP"
 chmod 0755 "$FAKE_MCP"
+# --- the stand-in for an MCP server the person declares: the engine's test fake of any server, run as dot the same way ---
+install -D -m 0644 "$ENGINE_TESTS/fakes/fake_tool_server.py" "$FAKE_MCP_DIR/fakes/fake_tool_server.py"
+FAKE_TOOLS=/usr/local/lib/smoke-fake/fake-tools
+printf '#!/bin/sh\nexec /opt/invisible-dots-engine/bin/python -I -B %s/fakes/fake_tool_server.py "$@"\n' "$FAKE_MCP_DIR" > "$FAKE_TOOLS"
+chmod 0755 "$FAKE_TOOLS"
 # --- dot-agentd as dotagentd, the engine as dotengine with the stand-in as its browser program ---
 MCP_COMMAND=$FAKE_MCP
 start_guest_daemons
@@ -437,6 +442,34 @@ TABLE_TOOLS=$(grep -c '^        "[a-z_]*": ToolEntry(' "$ENGINE_TESTS/../nanobot
 check "GET /tools through dot-agentd lists the $TABLE_TOOLS tools of the table, each with a description" "[ $TABLE_TOOLS -gt 0 ] && api $A/tools | jq -e '(.tools|length)==$TABLE_TOOLS and all(.tools[]; (.description|length)>0 and (.permission|length)>0)' >/dev/null"
 check "GET /tools offers what the model was offered" "[ \"\$(api $A/tools | jq -c '[.tools[]|select(.offered)|.name]|sort')\" = '[\"exec\",\"exec_session\",\"list_exec_sessions\"]' ]"
 check "GET /tools names the permission each tool exercises" "api $A/tools | jq -e '(.tools|map({(.name):.permission})|add) | .exec==\"computer.exec\" and .read_file==\"files.read\" and .write_file==\"files.write\" and .cron==\"automations\"' >/dev/null"
+# --- the MCP servers the person declares (architecture 8.3): through the image's relay, as dot, a secret by the
+# relay's environment; one whose program is not installed says why ---
+MCP_SECRET=smoke-mcp-secret-7
+# The secret as a pattern that does not match its own text, so a grep for it never finds its own command line.
+MCP_SECRET_SEEN='smoke-mcp-[s]ecret-7'
+echo '{"computer.exec":"allow","mcp.tools":"allow","mcp.missing":"ask"}' > /tmp/perms.json
+echo '{"tools":{"command":"'"$FAKE_TOOLS"'","env":{"MODE":"smoke"},"secrets":["TOKEN"],"timeout_s":30,"startup_timeout_s":30},"missing":{"command":"/usr/local/bin/not-installed","timeout_s":30,"startup_timeout_s":30}}' > /tmp/mcp.json
+echo '{"tools":{"TOKEN":"'"$MCP_SECRET"'"}}' > /tmp/mcp-secrets.json
+check "the host pushes two MCP servers and a secret of one (204 204)" "[ \"\$(push)\" = '204 204' ]"
+mcp_state() { api $A/tools | jq -r --arg n "$1" '.mcp_servers[]|select(.name==$n)|.state'; }
+wait_mcp_state() { for _ in $(seq 1 60); do [ "$(mcp_state "$1")" = "$2" ] && return 0; sleep 1; done; return 1; }
+check "GET /tools: the declared server connects through the relay, with its tools under mcp.tools" "wait_mcp_state tools connected && api $A/tools | jq -e '([.tools[]|select(.permission==\"mcp.tools\")|.name]|sort) == [\"mcp_tools_echo\",\"mcp_tools_env\",\"mcp_tools_exit\",\"mcp_tools_header\",\"mcp_tools_picture\"] and ([.tools[]|select(.permission==\"mcp.tools\")|.offered]|all)' >/dev/null"
+check "GET /tools: the server whose program is not installed is failed, saying what the relay found" "wait_mcp_state missing failed && api $A/tools | jq -e '.mcp_servers[]|select(.name==\"missing\")|.error|test(\"not-installed\")' >/dev/null"
+# A process's environment is its own user's to read: dot reads the server's, as a command of the model would.
+echo "the declared server's processes: $(ps -eo user=,pid=,args= | grep 'fake_tool_serve[r]' | tr '\n' ';')"
+check "the declared server runs as dot, and nothing of it as another user" "pgrep -u dot -f 'python.*fake_tool_server' >/dev/null && ! ps -eo user=,args= | grep 'fake_tool_serve[r]' | grep -v '^dot ' | grep -qv 'dot-agentd relay'"
+server_token_of_dot() { su -s /bin/bash dot -c 'for p in $(pgrep -u dot -f "[p]ython.*fake_tool_server"); do echo "$p $(tr "\\0" "\\n" < /proc/$p/environ | sed -n "s/^TOKEN=//p" | sha256sum | cut -c1-12) $(tr "\\0" "\\n" < /proc/$p/environ | grep -c ^TOKEN=)"; done'; }
+check "the declared server's secret is in its environment, which dot reads" "[ \"\$(server_token_of_dot | awk '{print \$2}' | sort -u)\" = \"\$(printf '%s\n' '$MCP_SECRET' | sha256sum | cut -c1-12)\" ] || { echo \"server processes (pid, hash of TOKEN, how many TOKEN): \$(server_token_of_dot | tr '\n' ';') expected \$(printf '%s\n' '$MCP_SECRET' | sha256sum | cut -c1-12)\"; false; }"
+check "the declared server's secret is on no command line" "! cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q '$MCP_SECRET_SEEN' || { echo \"found in: \$(grep -l '$MCP_SECRET_SEEN' /proc/[0-9]*/cmdline 2>/dev/null | tr '\n' ' ')\"; false; }"
+ev msg-mcp user.message '{"text":"RUN-TOOL mcp_tools_env {\"name\":\"MODE\"}"}' >/dev/null
+check "a call of the server's tool runs under mcp.tools and answers with the server's environment" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"mcp_tools_env\" and .data.ok==true and .data.permission==\"mcp.tools\"' && wait_event $STREAM '.type==\"message.assistant\" and .data.in_reply_to==\"msg-mcp\" and (.data.text|test(\"smoke\"))'"
+check "the prompt of that turn carries the server's instructions, and why the other is not connected" "grep -F 'RUN-TOOL mcp_tools_env' /tmp/fake-full.jsonl | grep -F 'Call echo to repeat a text.' | grep -q 'missing.nNot connected: '"
+check "the secret reached no request the model was sent" "! grep -q '$MCP_SECRET' /tmp/fake-full.jsonl"
+echo '{"computer.exec":"allow"}' > /tmp/perms.json
+echo '{}' > /tmp/mcp.json
+echo '{}' > /tmp/mcp-secrets.json
+check "the host pushes the allow-exec config with no server again (204 204)" "[ \"\$(push)\" = '204 204' ]"
+check "a server the config no longer declares is stopped, its tools gone" "for _ in \$(seq 1 30); do pgrep -u dot -f fake_tool_server.py >/dev/null || break; sleep 1; done; ! pgrep -u dot -f fake_tool_server.py >/dev/null && api $A/tools | jq -e '(.mcp_servers==[]) and ([.tools[]|select(.permission|startswith(\"mcp.\"))]==[])' >/dev/null"
 # The host reads the Dot's files through the TCP port, which is limited to /home/dot with every symbolic link followed.
 # A link a page could make the Dot stage must not show the proxy password in /proc/<pid>/environ of the browser server
 # (it runs as dot), nor the Dot's token. The engine's socket takes any path dot can open.

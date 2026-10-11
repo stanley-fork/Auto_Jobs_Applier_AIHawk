@@ -37,7 +37,7 @@ from nanobot.dots.browser import (
 )
 from nanobot.dots.computer import Computer, ComputerError
 from nanobot.dots.identity_rules import IDENTITY_ID_MAX
-from nanobot.dots.images import ToolImage, current_turn_images, placeholder
+from nanobot.dots.images import ToolImage, current_turn_images, placeholder, show_images
 from nanobot.dots.store import iso_from_ms
 
 # What invisible-playwright-mcp tells a model, at the version the image installs: written from the real server by
@@ -308,17 +308,9 @@ class BrowserPageTool(_BrowserTool):
             return _error(error)
         if result_is_error(result):
             return result
+        # The server answers with an image where it is the result (a screenshot, the page after a click at a point).
         text, images = split_result(result)
-        lines = [text] if text else []
-        for mime, data in images:
-            # Shown, as an MCP host shows a server's images: the server answers with one where it is the result
-            # (a screenshot, the page after a click at a point).
-            turn_images = current_turn_images()
-            if turn_images is None:
-                return ToolResult.error("an image can only be shown inside a model turn")
-            turn_images.add(ToolImage(f"{self._tool.name} of identity {identity_id}", mime, data))
-            lines.append(placeholder(data))
-        return "\n".join(lines)
+        return show_images(text, images, f"{self._tool.name} of identity {identity_id}")
 
 
 class ComputerScreenshotTool(Tool):

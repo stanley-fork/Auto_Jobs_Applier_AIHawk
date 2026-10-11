@@ -1,4 +1,4 @@
-"""Where `POST /secrets` puts the OpenRouter key: the memory of this process, and nowhere else.
+"""Where `POST /secrets` puts the OpenRouter key and the MCP servers' secrets: the memory of this process.
 
 invisible_dots architecture 4.3: a Dot keeps credentials in memory only. The
 host pushes the key at every READY and every agent.started; the holder keeps
@@ -11,7 +11,13 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from nanobot.dots.protocol import OPENROUTER_KEY_PATTERN, OPENROUTER_KEY_RULE
+from nanobot.dots.protocol import (
+    MCP_SECRET_PATTERN,
+    MCP_SECRET_RULE,
+    MCP_SERVER_NAME_PATTERN,
+    OPENROUTER_KEY_PATTERN,
+    OPENROUTER_KEY_RULE,
+)
 
 KeyChange = Literal["received", "replaced", "unchanged"]
 
@@ -64,3 +70,52 @@ class KeyHolder:
 
     def __repr__(self) -> str:
         return f"KeyHolder(configured={self.configured})"
+
+
+_MCP_SERVER_NAME = re.compile(MCP_SERVER_NAME_PATTERN)
+_MCP_SECRET_FORMAT = re.compile(MCP_SECRET_PATTERN)
+
+
+class McpSecrets:
+    """The values of the secrets the config's MCP servers name, by server and name, in memory.
+
+    The host pushes them with the OpenRouter key (`POST /secrets`, `mcp_secrets`). They leave this holder only for
+    the server that names them: as environment variables of its process, through the relay's own environment and
+    never its command line (computer.py), or as headers of its requests. They are masked in the conversation files.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self) -> None:
+        self._values: dict[str, dict[str, str]] = {}
+
+    def set(self, values: object) -> bool:
+        """Hold `values`, the whole set; whether it differs from what was held. A value is never in an error."""
+        if not isinstance(values, dict):
+            raise ValueError("mcp_secrets must be an object of servers")
+        held: dict[str, dict[str, str]] = {}
+        for server, secrets in values.items():
+            if not isinstance(server, str) or _MCP_SERVER_NAME.fullmatch(server) is None:
+                raise ValueError("mcp_secrets: a key is not an MCP server name")
+            if not isinstance(secrets, dict):
+                raise ValueError(f"mcp_secrets.{server} must be an object of secrets")
+            for name, value in secrets.items():
+                if not isinstance(name, str) or not name:
+                    raise ValueError(f"mcp_secrets.{server}: a secret has no name")
+                if not isinstance(value, str) or _MCP_SECRET_FORMAT.fullmatch(value) is None:
+                    raise ValueError(f"mcp_secrets.{server}.{name}: {MCP_SECRET_RULE}")
+            held[server] = dict(secrets)
+        changed = held != self._values
+        self._values = held
+        return changed
+
+    def of(self, server: str) -> dict[str, str]:
+        """The secrets held for one server, by name (a copy)."""
+        return dict(self._values.get(server, {}))
+
+    def values(self) -> list[str]:
+        """Every value held, for masking."""
+        return [value for secrets in self._values.values() for value in secrets.values()]
+
+    def __repr__(self) -> str:
+        return f"McpSecrets(servers={sorted(self._values)})"

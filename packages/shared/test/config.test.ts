@@ -105,6 +105,7 @@ describe("parseDotConfig", () => {
       computer: { cpu: 2, memory: "4gb", disk: "40gb", idle_timeout: "15m" },
       permissions: {},
       limits: { max_steps_per_task: 60, max_cost_per_task_usd: 1 },
+      mcp_servers: {},
     });
   });
 

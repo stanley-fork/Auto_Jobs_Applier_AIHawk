@@ -15,6 +15,7 @@ import type {
   InboundEvent,
   OutboundEvent,
   RefusedEvent,
+  SecretsRequest,
   SystemAnswer,
   SkillListAnswer,
   ToolListAnswer,
@@ -31,7 +32,7 @@ import type {
 export interface GuestApi {
   health(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HealthAnswer>;
   system(): Promise<SystemAnswer>;
-  pushSecrets(openrouterApiKey: string): Promise<void>;
+  pushSecrets(secrets: SecretsRequest): Promise<void>;
   putConfig(config: DotRuntimeConfig): Promise<void>;
   postEvent(event: InboundEvent): Promise<unknown>;
   state(): Promise<AgentStateAnswer>;

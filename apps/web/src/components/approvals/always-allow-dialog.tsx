@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 function useToolTable(dotId: string) {
   return useResource(async () => {
     try {
-      return await api.listTools(dotId);
+      return (await api.listTools(dotId)).tools;
     } catch {
       return null;
     }

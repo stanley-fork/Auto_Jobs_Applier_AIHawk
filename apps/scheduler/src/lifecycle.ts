@@ -368,21 +368,23 @@ export class Lifecycle {
   }
 
   /**
-   * Push what the guest must hold: the OpenRouter key (memory only in the
-   * guest, so lost with every agent restart) and the runtime config, both
-   * read from the database now. The one place that does this, for READY,
-   * for a changed key or config, and after an agent restart.
+   * Push what the guest must hold: the OpenRouter key and the secrets the
+   * config's MCP servers name (memory only in the guest, so lost with every
+   * agent restart), then the runtime config, all read from the database now.
+   * The one place that does this, for READY, for a changed key, secret or
+   * config, and after an agent restart.
    */
   async #push(dotId: string, guest: GuestApi): Promise<void> {
     const key = await this.#db.secrets.openRouterKey(dotId);
     if (!key) throw new NotReadyError(dotId, `${MISSING_KEY_MESSAGE}; set one with PUT /api/secrets/openrouter`);
     const dot = await this.#db.dots.get(dotId);
     if (!dot) throw new ControlPlaneError(404, "not_found", `Dot ${dotId} not found`);
+    const mcpSecrets = await this.#db.secrets.mcpSecrets(dotId, dot.config.mcp_servers);
     try {
-      await guest.pushSecrets(key);
+      await guest.pushSecrets({ openrouter_api_key: key, mcp_secrets: mcpSecrets });
     } catch (error) {
-      // Never the guest's own words here: whatever answered may have echoed the key.
-      throw new Error(`the guest did not take the OpenRouter key (${describeWithoutBody(error)})`);
+      // Never the guest's own words here: whatever answered may have echoed a secret.
+      throw new Error(`the guest did not take the OpenRouter key and the MCP secrets (${describeWithoutBody(error)})`);
     }
     await guest.putConfig(toRuntimeConfig(dot.config));
   }

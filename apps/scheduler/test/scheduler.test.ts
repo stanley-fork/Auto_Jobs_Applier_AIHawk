@@ -1191,12 +1191,100 @@ describe.each(testAdapters())("Scheduler with a fake driver and a fake guest (%s
     expect(await scheduler.listFiles(dot.id, "docs")).toMatchObject({ entries: [{ name: "note.txt", size: 4 }] });
   });
 
+  describe("MCP servers", () => {
+    const withServers = (name: string, servers: string, permissions = "") =>
+      `${yaml(name)}${permissions ? `permissions:\n${permissions}` : ""}mcp_servers:\n${servers}`;
+    const TIME = "  time:\n    command: uvx\n    args: [mcp-server-time]\n    secrets: [TIME_TOKEN]\n";
+    const WEB = "  web:\n    url: https://web.example/mcp\n    secrets: [Authorization]\n";
+
+    it("a secret is set write-only, pushed with the key, and the answer says only which are set", async () => {
+      const { scheduler, driver } = make();
+      const dot = await scheduler.createDot(withServers("mcp-push", TIME + WEB));
+      await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-push");
+      const guest = driver.guestOf(dot.id);
+      expect(guest.mcpSecrets).toEqual({});
+
+      const answer = await scheduler.setMcpSecret(dot.id, "web", "Authorization", "  Bearer w-1 ");
+      expect(answer.secrets).toEqual([
+        { server: "time", name: "TIME_TOKEN", set: false },
+        { server: "web", name: "Authorization", set: true },
+      ]);
+      expect(JSON.stringify(answer)).not.toContain("w-1");
+      expect(guest.mcpSecrets).toEqual({ web: { Authorization: "Bearer w-1" } });
+
+      await scheduler.setMcpSecret(dot.id, "web", "Authorization", null);
+      expect(guest.mcpSecrets).toEqual({});
+      // The guest restarts with nothing in memory: the next READY pushes what is stored again.
+      await scheduler.setMcpSecret(dot.id, "time", "TIME_TOKEN", "tt-1");
+      guest.restartAgent();
+      await waitFor(() => guest.mcpSecrets.time?.TIME_TOKEN === "tt-1", "the secrets pushed again after the restart");
+    });
+
+    it("refuses a secret the config does not name, and a value that cannot travel, without storing anything", async () => {
+      const { scheduler, driver } = make();
+      const dot = await scheduler.createDot(withServers("mcp-refuse", TIME));
+      await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-refuse");
+
+      await expect(scheduler.setMcpSecret(dot.id, "ghost", "TIME_TOKEN", "x")).rejects.toMatchObject({ status: 404 });
+      await expect(scheduler.setMcpSecret(dot.id, "time", "OTHER", "x")).rejects.toMatchObject({ status: 404 });
+      const refused = scheduler.setMcpSecret(dot.id, "time", "TIME_TOKEN", "tok-SECRET\nX");
+      await expect(refused).rejects.toMatchObject({ status: 400, code: "invalid_request" });
+      await refused.catch((error: Error) => expect(error.message).not.toContain("SECRET"));
+      expect((await scheduler.mcpSecrets(dot.id)).secrets).toEqual([{ server: "time", name: "TIME_TOKEN", set: false }]);
+    });
+
+    it("a config that drops a server, or a name of its secrets, drops their values with it", async () => {
+      const { scheduler, driver } = make();
+      const dot = await scheduler.createDot(withServers("mcp-drop", TIME + WEB));
+      await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-drop");
+      await scheduler.setMcpSecret(dot.id, "time", "TIME_TOKEN", "tt-1");
+      await scheduler.setMcpSecret(dot.id, "web", "Authorization", "Bearer w-1");
+
+      await scheduler.updateDot(dot.id, withServers("mcp-drop", TIME));
+      expect(await db.secrets.get(dot.id, "mcp/web/Authorization")).toBeNull();
+      expect(driver.guestOf(dot.id).mcpSecrets).toEqual({ time: { TIME_TOKEN: "tt-1" } });
+      // Declared again, it starts with nothing set.
+      await scheduler.updateDot(dot.id, withServers("mcp-drop", TIME + WEB));
+      expect((await scheduler.mcpSecrets(dot.id)).secrets.find((s) => s.server === "web")?.set).toBe(false);
+    });
+
+    it("the tool table says where each declared server is, and its tools are under its permission", async () => {
+      const { scheduler, driver } = make();
+      const dot = await scheduler.createDot(withServers("mcp-table", TIME + WEB, '  mcp.time: allow\n'));
+      await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-table");
+      const guest = driver.guestOf(dot.id);
+      guest.mcpTools.set("time", [{ name: "mcp_time_now", description: "Now." }]);
+      guest.mcpFailures.set("web", "its secret Authorization is not set");
+
+      const { tools, mcp_servers } = await scheduler.listTools(dot.id);
+      expect(tools.find((t) => t.name === "mcp_time_now")).toEqual({ name: "mcp_time_now", permission: "mcp.time", offered: true, description: "Now." });
+      expect(mcp_servers).toEqual([
+        { name: "time", state: "connected", error: null, tools: 1 },
+        { name: "web", state: "failed", error: "its secret Authorization is not set", tools: 0 },
+      ]);
+    });
+
+    it("always allowing the permission of a server the config no longer declares is refused, and nothing changes", async () => {
+      const { scheduler, driver } = make();
+      const dot = await scheduler.createDot(withServers("mcp-always", TIME));
+      await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-always");
+      const id = driver.guestOf(dot.id).requestApproval(undefined, "mcp_time_now", "mcp.time");
+      await waitFor(async () => (await scheduler.listApprovals("pending")).some((a) => a.id === id), "the approval");
+      await scheduler.updateDot(dot.id, yaml("mcp-always"));
+
+      await expect(scheduler.resolveApproval(id, "approve", { always: true })).rejects.toMatchObject({ status: 409, code: "permission_gone" });
+      expect((await db.approvals.get(id))?.status).toBe("pending");
+      expect((await db.dots.get(dot.id))?.config.permissions).toEqual({});
+    });
+  });
+
   it("tools: the engine's table with what is offered now; an unreachable computer is not an empty table", async () => {
     const { scheduler, driver } = make();
     const dot = await readyDot(scheduler, "toolbox");
     const guest = driver.guestOf(dot.id);
 
-    const tools = await scheduler.listTools("toolbox");
+    const { tools, mcp_servers } = await scheduler.listTools("toolbox");
+    expect(mcp_servers).toEqual([]);
     expect(tools.map((t) => [t.name, t.permission])).toEqual([
       ["exec", "computer.exec"],
       ["read_file", "files.read"],
@@ -1210,8 +1298,8 @@ describe.each(testAdapters())("Scheduler with a fake driver and a fake guest (%s
     await scheduler.updateDot(dot.id, `${yaml("toolbox")}permissions:
   automations: deny
 `);
-    await waitFor(async () => (await scheduler.listTools(dot.id)).some((t) => !t.offered), "config pushed");
-    expect((await scheduler.listTools(dot.id)).filter((t) => !t.offered).map((t) => t.name)).toEqual(["cron"]);
+    await waitFor(async () => (await scheduler.listTools(dot.id)).tools.some((t) => !t.offered), "config pushed");
+    expect((await scheduler.listTools(dot.id)).tools.filter((t) => !t.offered).map((t) => t.name)).toEqual(["cron"]);
 
     guest.powerOff();
     await expect(scheduler.listTools(dot.id)).rejects.toMatchObject({ status: 502, code: "guest_unavailable" });

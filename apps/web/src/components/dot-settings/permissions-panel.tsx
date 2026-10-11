@@ -1,41 +1,17 @@
 "use client";
 
 import { computerIsUp, type PermissionDecision, type PermissionRisk } from "@invisible-dots/shared/browser";
-import { api } from "../../lib/api";
 import { RISK_LABEL } from "../../lib/approval-view";
 import { setPermission } from "../../lib/config-fields";
-import { isComputerStopped } from "../../lib/computer";
 import { DECISION_LABEL, DECISION_MEANING, DECISIONS, permissionGroups, type PermissionRow } from "../../lib/permission-table";
 import { cn } from "../../lib/utils";
 import { TONE_CLASS } from "../dot/tone";
 import { ErrorAlert } from "../ErrorAlert";
-import { useLiveRefresh } from "../events";
 import { PresetPicker } from "../new-dot/PresetPicker";
-import { useResource } from "../ui";
 import { Panel, type PanelProps } from "./panel";
+import type { ToolTable } from "./tool-table";
 
 const RISK_TONE: Record<PermissionRisk, keyof typeof TONE_CLASS> = { low: "neutral", medium: "warn", high: "error" };
-
-/**
- * The Dot's tool table as its engine has it (`GET /tools`): every tool with the permission it uses and whether the
- * model is offered it. Only a running computer has one to read, so a stopped one is not asked; the permissions
- * can be edited either way. The offers change when a config is pushed and when the computer comes up.
- */
-function useToolTable(dotId: string, computerState: string | null | undefined) {
-  const up = computerIsUp(computerState);
-  const table = useResource(async () => {
-    if (!up) return null;
-    try {
-      return await api.listTools(dotId);
-    } catch (error) {
-      // The computer went down between the state and the question: the same as not running.
-      if (isComputerStopped(error)) return null;
-      throw error;
-    }
-  }, `tools:${dotId}:${up}`);
-  useLiveRefresh(table.reload, ["dot.updated", "computer.state"]);
-  return table;
-}
 
 function DecisionControl({ row, onChange }: { row: PermissionRow; onChange: (decision: PermissionDecision) => void }) {
   return (
@@ -83,10 +59,9 @@ function Tools({ row }: { row: PermissionRow }) {
  * marked in words, and the tools that use it. The preset picker is the create page's, so the three presets mean the same
  * in both. A permission set to what its default is leaves the config's `permissions` without an entry (`setPermission`).
  */
-export function PermissionsPanel({ draft, saved, change, dotId, computerState }: PanelProps & { dotId: string; computerState: string | null | undefined }) {
-  const table = useToolTable(dotId, computerState);
+export function PermissionsPanel({ draft, saved, change, computerState, table }: PanelProps & { computerState: string | null | undefined; table: ToolTable }) {
   const up = computerIsUp(computerState);
-  const groups = permissionGroups(draft, saved, up ? (table.data ?? null) : null);
+  const groups = permissionGroups(draft, saved, up ? (table.data?.tools ?? null) : null);
   // The computer is not running, or is said to run but its engine does not answer (it is just starting): there is no table to show.
   const silent = computerState !== undefined && (!up || (table.data === null && !table.loading));
 

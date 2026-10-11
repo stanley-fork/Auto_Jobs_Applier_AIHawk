@@ -102,7 +102,7 @@ export class Product {
 
   /**
    * One `invisible-dots` call. Its arguments and output go to the CLI log; stdin
-   * (only ever the key) does not. With `stream`, output is also appended to
+   * (only ever a secret: the key, an MCP server's) does not. With `stream`, output is also appended to
    * that file as it arrives, for a long command whose progress is followed.
    */
   cli = async (args: string[], options: { stdin?: string; timeoutMs?: number; stream?: string } = {}): Promise<CliResult> => {

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nanobot.dots.permissions import offered_tools
+from nanobot.dots.permissions import offered_mcp_servers, offered_tools
 from nanobot.dots.protocol import MODEL_ROLES, DotRuntimeConfig
 
 # Longest result of one tool call that goes back to the model, in characters.
@@ -24,8 +24,11 @@ class EngineSettings:
     models: tuple[tuple[str, str], ...]
     # The OpenRouter API base URL for tests against a stand-in; None means the provider's own.
     openrouter_base_url: str | None
-    # The tools the model is offered: those whose permission is not denied.
+    # The tools of the permission table the model is offered: those whose permission is not denied.
     offered_tools: tuple[str, ...]
+    # The declared MCP servers whose tools the model is offered (permission `mcp.<server>` not denied), by name.
+    # Which tools those are is the servers' to say, when a turn starts (mcp_servers.py).
+    mcp_servers: tuple[str, ...]
     max_iterations: int
     # What a task, or the chat between two answers, may spend on the model, in USD (see nanobot.dots.spend).
     max_cost_usd: float
@@ -49,6 +52,7 @@ def project(config: DotRuntimeConfig, *, workspace: str, openrouter_base_url: st
         models=tuple((role, named[role]) for role in MODEL_ROLES if role in named),
         openrouter_base_url=(openrouter_base_url or "").strip() or None,
         offered_tools=tuple(offered),
+        mcp_servers=tuple(offered_mcp_servers(config.mcp_servers, config.permissions)),
         max_iterations=config.limits.max_steps_per_task,
         max_cost_usd=config.limits.max_cost_per_task_usd,
         max_tool_result_chars=MAX_TOOL_RESULT_CHARS,

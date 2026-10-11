@@ -49,9 +49,10 @@ tested by `tests/repo/e2e.test.ts` on every push:
 | j | the server restarts and adopts the running VM (same pid, browser still open); `invisible-dots computer stop` reaches STOPPED with QEMU gone, through the guest's own poweroff (`computer.stopped` says `forced: false`, in well under the 60 s after which QEMU is killed); the open browser was closed on the way down (`browser.identity.closed`); `start` reaches READY with no browser server running; the identity is launched again and its `.stealth-identity.json` is unchanged (by SHA-256); `title.txt`, the note, a `grep` that finds it, and the conversation are all still there; the guest's whole system journal, read inside the guest, holds no OpenRouter key |
 | k | with `computer.exec: ask`, a task stops at an approval; the **computer is killed** (SIGKILL of QEMU) while it waits; the control plane records `computer.stopped` with `reason: exited` and starts the computer again by itself (the Dot still has a task), a second `agent.started` follows, the engine resumes from its database with the same approval pending and the host re-pushes key and config; approved with a note, the task completes and a counter file proves the command ran exactly once |
 | l | a task runs a slow `exec`; while it is in flight the computer is killed the same way; after the restart the Dot's event log has that call once, as a `tool.called` with `interrupted: true`, and once the command's time is over no copy of it is running and its marker file was never written: the command died with its computer and was not run again (architecture 8.7) |
-| m | the key is in none of the Dot's event and approval rows (read back decompressed through the API) and, once the Dot is stopped, in none of its files: the overlay disk, the seed, the serial log and QEMU's log |
-| n | `DELETE /api/dots/:id` removes the Dot, its QEMU process and `vms/<id>` |
-| o | the key is in no event row read back after the delete, and in no file of the run's logs, `logs/` or the embedded database's directory |
+| m | two MCP servers in the config, both `uvx mcp-server-time`: `time`, whose permission asks, and `keyed`, which names the secret `TIME_TOKEN`. `keyed` is `failed` because its secret is not set; a task's call of `mcp_time_get_current_time` stops at an approval for `mcp.time`, approved always, and runs; `GET .../tools` lists `time` connected with its tools offered, and its process runs as `dot`. The secret is set through `invisible-dots secret mcp` (stdin, not echoed), `keyed` connects at the next turn, `invisible-dots mcp` says so, and the secret is in the server's environment and on no command line in the guest |
+| n | the key and the MCP secret are in none of the Dot's event and approval rows (read back decompressed through the API) and, once the Dot is stopped, in none of its files: the overlay disk, the seed, the serial log and QEMU's log |
+| o | `DELETE /api/dots/:id` removes the Dot, its QEMU process and `vms/<id>` |
+| p | the key and the MCP secret are in no event row read back after the delete, and in no file of the run's logs, `logs/` or the embedded database's directory |
 
 Steps k and l end the computer, not the engine alone. The engine runs as
 `dotengine`, dot-agentd as `dotagentd` and everything the model runs as `dot`, and no
@@ -71,10 +72,11 @@ of the key. They look for its first 12 characters; the journal check of step j
 looks inside the guest for the `sk-or-` prefix every OpenRouter key has (the run
 refuses a key without it), without giving the model any part of the key, and is
 only accepted when the guest proves it read the system journal. Large rows are
-compressed inside the database's files, which is why step m reads them through
-the API as well as step o scanning the files. The guest's journal compresses
-large entries too, which is why step j reads it inside the guest besides step m
-scanning the disk.
+compressed inside the database's files, which is why step n reads them through
+the API as well as step p scanning the files. The guest's journal compresses
+large entries too, which is why step j reads it inside the guest besides step n
+scanning the disk. The MCP secret of step m is looked for whole: it is made for
+the run and never shown to the model.
 
 A file the Dot wrote is checked by having the Dot hash it in the guest
 (`printf '%s' "$(cat <file>)" | sha256sum`, so a trailing newline does not

@@ -8,7 +8,7 @@ model's commands (SO_PEERCRED), so that a directory mode changed by mistake
 does not leave the Dot's permissions and approvals to its own model.
 
 The server logs a request's method, path and status, never a body: the body of
-`POST /secrets` is the OpenRouter key.
+`POST /secrets` is the OpenRouter key and the MCP servers' secrets.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from nanobot.dots.protocol import (
     InvalidEvent,
     parse_inbound_event,
 )
-from nanobot.dots.secrets import KeyHolder
+from nanobot.dots.secrets import KeyHolder, McpSecrets
 from nanobot.dots.store import iso_from_ms
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -154,6 +154,7 @@ class AgentServer:
         *,
         engine: Engine,
         key_holder: KeyHolder,
+        mcp_secrets: McpSecrets,
         checks: GuestCheckRunner,
         max_body_bytes: int = MAX_BODY_BYTES,
         heartbeat_s: float = HEARTBEAT_S,
@@ -161,6 +162,7 @@ class AgentServer:
     ) -> None:
         self._engine = engine
         self._key_holder = key_holder
+        self._mcp_secrets = mcp_secrets
         self._checks = checks
         self._max_body = max_body_bytes
         self._heartbeat_s = heartbeat_s
@@ -272,14 +274,23 @@ class AgentServer:
             key = body.get("openrouter_api_key") if isinstance(body, dict) else None
             if not isinstance(key, str):
                 raise HttpError(400, "invalid_secret", "openrouter_api_key must be a non-empty string")
+            if not isinstance(body, dict) or "mcp_secrets" not in body:
+                raise HttpError(400, "invalid_secret", "mcp_secrets must be an object of servers")
+            # Both checked before either is held: a request refused changes nothing.
+            mcp_secrets = McpSecrets()
+            try:
+                mcp_secrets.set(body["mcp_secrets"])
+            except ValueError as error:
+                # The holder's reasons never name a value; `from None` keeps the chain out of any log too.
+                raise HttpError(400, "invalid_secret", str(error)) from None
             try:
                 change = self._key_holder.set(key)
             except ValueError as error:
-                # The holder's reasons never name the key; `from None` keeps the chain out of any log too.
                 raise HttpError(400, "invalid_secret", f"openrouter_api_key: {error}") from None
-            # Never the value, not even a prefix of it.
-            logger.info("OpenRouter key {}", change)
-            engine.key_received()
+            changed = self._mcp_secrets.set(body["mcp_secrets"])
+            # Never a value, not even a prefix of one.
+            logger.info("OpenRouter key {}; MCP secrets {}", change, "changed" if changed else "unchanged")
+            engine.secrets_received()
             return web.Response(status=204)
 
         if path == AGENT_ROUTES["config"]:
@@ -372,7 +383,7 @@ class AgentServer:
 
         if path == AGENT_ROUTES["tools"]:
             _allow(method, "GET")
-            return _json_response(200, {"tools": engine.tool_table()})
+            return _json_response(200, {"tools": engine.tool_table(), "mcp_servers": engine.mcp_status()})
 
         if path == AGENT_ROUTES["skills"]:
             _allow(method, "GET")

@@ -25,7 +25,7 @@ export function PresetPicker({ permissions, onChange }: { permissions: Record<st
               )}
             >
               <span className="flex items-center gap-2 font-medium">
-                <input type="radio" name="permission-preset" value={id} checked={chosen === id} onChange={() => onChange(presetPermissions(id))} className="accent-primary" />
+                <input type="radio" name="permission-preset" value={id} checked={chosen === id} onChange={() => onChange(presetPermissions(id, permissions))} className="accent-primary" />
                 {preset.label}
               </span>
               <span className="text-xs text-muted-foreground">{preset.description}</span>

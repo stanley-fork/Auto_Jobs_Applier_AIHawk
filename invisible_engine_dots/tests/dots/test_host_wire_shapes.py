@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from nanobot.dots.protocol import INBOUND_EVENT_TYPES, parse_inbound_event, parse_runtime_config
+from nanobot.dots.secrets import KeyHolder, McpSecrets
 
 SHAPES = json.loads(Path(__file__).with_name("host_wire_shapes.json").read_text(encoding="utf-8"))
 TS = "2026-10-06T09:00:00.000Z"
@@ -46,3 +47,21 @@ def test_every_config_the_host_pushes_is_accepted_with_every_key_it_carries(name
     parsed = parse_runtime_config(config)
 
     assert parsed.model_dump(mode="json", exclude_none=True) == config
+
+
+@pytest.mark.parametrize("index", range(len(SHAPES["secrets_requests"])))
+def test_every_secrets_push_of_the_host_is_held_whole(index: int) -> None:
+    body = SHAPES["secrets_requests"][index]
+    keys, mcp = KeyHolder(), McpSecrets()
+
+    keys.set(body["openrouter_api_key"])
+    mcp.set(body["mcp_secrets"])
+
+    assert set(body) == {"openrouter_api_key", "mcp_secrets"}
+    assert {server: mcp.of(server) for server in body["mcp_secrets"]} == body["mcp_secrets"]
+
+
+def test_the_full_config_declares_both_kinds_of_mcp_server() -> None:
+    full = parse_runtime_config(next(entry["config"] for entry in SHAPES["runtime_configs"] if entry["name"] == "shapes-full"))
+
+    assert [type(server).__name__ for server in full.mcp_servers.values()] == ["McpStdioServer", "McpHttpServer"]

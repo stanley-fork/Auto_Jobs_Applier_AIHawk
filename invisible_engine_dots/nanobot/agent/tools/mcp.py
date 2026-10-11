@@ -6,10 +6,11 @@ import asyncio
 import base64
 import hashlib
 import re
+import sys
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, suppress
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TextIO, cast
 
 import httpx
 from loguru import logger
@@ -99,6 +100,8 @@ class _OwnedMCPConnection:
     def __init__(self, owner: asyncio.Task[None], close_requested: asyncio.Event) -> None:
         self._owner = owner
         self._close_requested = close_requested
+        # What the server said at initialize for the model: how to use its tools (empty when it said nothing).
+        self.instructions = ""
 
     async def aclose(self) -> None:
         self._close_requested.set()
@@ -228,6 +231,14 @@ def _is_transient_connection_failure(exc: BaseException) -> bool:
             _is_transient_connection_failure(nested) for nested in group.exceptions
         )
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) or _is_transient(exc)
+
+
+def _failure_text(exc: BaseException) -> str:
+    """One line of why a connection failed: the innermost error of a group, by its type and its message."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
 def _log_mcp_connection_failure(name: str, exc: BaseException, hint: str = "") -> None:
@@ -919,12 +930,19 @@ async def connect_mcp_servers(
     mcp_servers: dict[str, MCPServerConfig],
     registry: ToolRegistry,
     on_ended: Callable[[str], None] | None = None,
+    *,
+    errlogs: Mapping[str, TextIO] | None = None,
+    failures: dict[str, str] | None = None,
 ) -> dict[str, MCPConnection]:
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
     `on_ended` is called with a server's name when its transport ends by itself, with no call in
     flight needed to find out: its process exited or its connection dropped. It is not called for a
     connection this module closes.
+
+    `errlogs` gives a stdio server, by name, the file its standard error goes to (the engine's own
+    otherwise). `failures` receives, by name, one line of why each server that did not connect did not.
+    A connection's `instructions` are what its server said at initialize.
 
     Returns one connection handle per server.  Each handle keeps the task that
     entered the MCP SDK contexts alive so reconnect and shutdown can close
@@ -934,6 +952,12 @@ async def connect_mcp_servers(
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+
+    def failed(name: str, reason: str) -> None:
+        if failures is not None:
+            failures[name] = reason
+
+    served_instructions: dict[str, str] = {}
 
     async def open_single_server(
         name: str, cfg: MCPServerConfig, server_stack: AsyncExitStack
@@ -949,6 +973,7 @@ async def connect_mcp_servers(
                     )
                 else:
                     logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                    failed(name, "it has no command or url")
                     return False
 
             if transport_type == "stdio":
@@ -958,10 +983,12 @@ async def connect_mcp_servers(
                     env=cfg.env or None,
                     cwd=cfg.cwd or None,
                 )
-                read, write = await server_stack.enter_async_context(stdio_client(params))
+                errlog = (errlogs or {}).get(name, sys.stderr)
+                read, write = await server_stack.enter_async_context(stdio_client(params, errlog=errlog))
             elif transport_type == "sse":
                 if not await _probe_http_url(cfg.url):
                     logger.warning("MCP server '{}': {} unreachable, skipping", name, _redact_url(cfg.url))
+                    failed(name, f"{_redact_url(cfg.url)} is unreachable")
                     return False
 
                 def httpx_client_factory(
@@ -987,6 +1014,7 @@ async def connect_mcp_servers(
             elif transport_type == "streamableHttp":
                 if not await _probe_http_url(cfg.url):
                     logger.warning("MCP server '{}': {} unreachable, skipping", name, _redact_url(cfg.url))
+                    failed(name, f"{_redact_url(cfg.url)} is unreachable")
                     return False
 
                 http_client = await server_stack.enter_async_context(
@@ -1001,13 +1029,15 @@ async def connect_mcp_servers(
                 )
             else:
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+                failed(name, f"unknown transport type {transport_type}")
                 return False
 
             read = _filter_malformed_mcp_progress_notifications(
                 read, name, (lambda: on_ended(name)) if on_ended is not None else None
             )
             session = await server_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
+            started = await session.initialize()
+            served_instructions[name] = (getattr(started, "instructions", None) or "").strip()
 
             # Finish discovery before registering tools so a failed page leaves no partial set.
             page = await session.list_tools()
@@ -1139,6 +1169,7 @@ async def connect_mcp_servers(
                     "only JSON-RPC to stdout and sends logs/debug output to stderr instead."
                 )
             _log_mcp_connection_failure(name, e, hint)
+            failed(name, _failure_text(e) + hint)
             return False
 
     async def connect_single_server(
@@ -1172,11 +1203,13 @@ async def connect_mcp_servers(
                 await asyncio.shield(owner)
             if isinstance(exc, asyncio.CancelledError) and not task_is_cancelling():
                 logger.warning("MCP server '{}': connection cancelled by server/SDK", name)
+                failed(name, "the connection was cancelled by the server")
                 return name, None
             raise
         if not connected:
             await connection.aclose()
             return name, None
+        connection.instructions = served_instructions.get(name, "")
         return name, connection
 
     server_stacks: dict[str, MCPConnection] = {}
@@ -1189,6 +1222,7 @@ async def connect_mcp_servers(
                 result = await connect_single_server(name, cfg)
             except Exception as e:
                 _log_mcp_connection_failure(name, e)
+                failed(name, _failure_text(e))
                 continue
             if result[1] is not None:
                 server_stacks[result[0]] = result[1]
@@ -1215,6 +1249,7 @@ class MCPProvider:
         servers: Mapping[str, MCPServerConfig],
         registry: ToolRegistry,
         on_terminated: Callable[[str], None] | None = None,
+        errlogs: Mapping[str, TextIO] | None = None,
     ) -> None:
         """Own `servers`, registering their tools on `registry`.
 
@@ -1224,11 +1259,15 @@ class MCPProvider:
         `on_terminated`: it is then called with the server's name, nothing is
         reconnected, and the failed call returns its error. It is also called when the
         process ends with no call in flight, so an idle server's end is reported at once.
+
+        `errlogs` gives a stdio server, by name, the file its standard error goes to.
         """
         self._servers = dict(servers)
         self._registry = registry
         self._on_terminated = on_terminated
+        self._errlogs = dict(errlogs or {})
         self._connections: dict[str, MCPConnection] = {}
+        self._failures: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._closing = False
 
@@ -1236,12 +1275,20 @@ class MCPProvider:
         """Connect configured servers that are not currently live.
 
         Returns the configured servers that are not connected when it returns, in
-        configuration order: empty when every server is live. The reason a server
-        failed is in the log, not in the return value.
+        configuration order: empty when every server is live. Why one failed is
+        `failure(name)`.
         """
         async with self._lock:
             await self._connect_missing()
             return [name for name in self._servers if name not in self._connections]
+
+    def instructions(self, name: str) -> str:
+        """What a connected server said at initialize for the model; empty when it said nothing or is not connected."""
+        return str(getattr(self._connections.get(name), "instructions", ""))
+
+    def failure(self, name: str) -> str | None:
+        """One line of why the last attempt to connect a server failed; None when it is connected or was not tried."""
+        return None if name in self._connections else self._failures.get(name)
 
     async def _connect_missing(self) -> None:
         if self._closing:
@@ -1254,7 +1301,13 @@ class MCPProvider:
         if not missing_servers:
             return
         try:
-            connected = await connect_mcp_servers(missing_servers, self._registry, self._transport_ended)
+            connected = await connect_mcp_servers(
+                missing_servers,
+                self._registry,
+                self._transport_ended,
+                errlogs=self._errlogs,
+                failures=self._failures,
+            )
             if self._closing:
                 await _close_mcp_connections(connected)
                 return
@@ -1355,6 +1408,8 @@ class MCPProvider:
                 {server_name: cfg},
                 self._registry,
                 self._transport_ended,
+                errlogs=self._errlogs,
+                failures=self._failures,
             )
             if self._closing:
                 await _close_mcp_connections(connected)

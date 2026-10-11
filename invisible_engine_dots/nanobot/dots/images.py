@@ -21,9 +21,12 @@ from __future__ import annotations
 import base64
 import binascii
 import struct
+from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
+
+from nanobot.agent.tools.base import ToolResult
 
 # How many images of one turn the model is shown: the newest.
 IMAGES_KEPT = 3
@@ -137,3 +140,17 @@ def reset_turn_images(token: Token[TurnImages | None]) -> None:
 def current_turn_images() -> TurnImages | None:
     """The images of the turn the calling tool runs in; None outside a turn."""
     return _CURRENT.get()
+
+
+def show_images(text: str, images: Sequence[tuple[str, str]], caption: str) -> Any:
+    """What a tool answers with when an MCP server's answer had images, as (media type, base64 data): its text, then a
+    placeholder for each image, which is shown to the model for this turn, as an MCP host shows a server's images.
+    An error outside a turn, where nothing can be shown."""
+    lines = [text] if text else []
+    for mime, data in images:
+        turn_images = current_turn_images()
+        if turn_images is None:
+            return ToolResult.error("an image can only be shown inside a model turn")
+        turn_images.add(ToolImage(caption, mime, data))
+        lines.append(placeholder(data))
+    return "\n".join(lines)

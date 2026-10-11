@@ -37,6 +37,7 @@ import {
   type DoctorCheck,
   type ListOrder,
   type SkillListAnswer,
+  type McpSecretsAnswer,
   type ToolListAnswer,
 } from "@invisible-dots/shared";
 import { doctorAnswer } from "@invisible-dots/vm-manager";
@@ -327,7 +328,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.get<{ Params: Params }>(
     "/api/dots/:id/tools",
-    async (request): Promise<ToolListAnswer> => ({ tools: await scheduler.listTools(request.params.id) }),
+    async (request): Promise<ToolListAnswer> => scheduler.listTools(request.params.id),
   );
 
   app.get<{ Params: Params }>(
@@ -511,6 +512,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   app.get<{ Params: { id: string } }>("/api/dots/:id/proxy", async (request) => scheduler.vmProxy(request.params.id));
   app.put<{ Params: { id: string } }>("/api/dots/:id/proxy", async (request) => scheduler.setVmProxy(request.params.id, bodyOf(request).value));
   app.delete<{ Params: { id: string } }>("/api/dots/:id/proxy", async (request) => scheduler.setVmProxy(request.params.id, null));
+
+  // The secrets of a Dot's MCP servers: write-only, the answers say only which are set.
+  type McpSecretParams = { id: string; server: string; name: string };
+  app.get<{ Params: Params }>("/api/dots/:id/mcp-secrets", async (request): Promise<McpSecretsAnswer> => scheduler.mcpSecrets(request.params.id));
+  app.put<{ Params: McpSecretParams }>(
+    "/api/dots/:id/mcp-secrets/:server/:name",
+    async (request): Promise<McpSecretsAnswer> => // A PUT sets: a null value is no value (a clear is the DELETE).
+      scheduler.setMcpSecret(request.params.id, request.params.server, request.params.name, bodyOf(request).value ?? undefined),
+  );
+  app.delete<{ Params: McpSecretParams }>(
+    "/api/dots/:id/mcp-secrets/:server/:name",
+    async (request): Promise<McpSecretsAnswer> => scheduler.setMcpSecret(request.params.id, request.params.server, request.params.name, null),
+  );
 
   return app;
 }

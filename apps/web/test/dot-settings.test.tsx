@@ -106,7 +106,7 @@ describe("the settings of a Dot", () => {
   it("has a section for each part of the config, and a danger zone last", async () => {
     await renderSettings();
     const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(["General", "Model", "Permissions and tools", "Computer", "Limits", "VM proxy", "Danger zone"]);
+    expect(headings).toEqual(["General", "Model", "Permissions and tools", "MCP servers", "Computer", "Limits", "VM proxy", "Danger zone"]);
   });
 });
 
@@ -508,5 +508,64 @@ describe("the danger zone", () => {
     dialog = await screen.findByRole("dialog");
     expect((within(dialog).getByLabelText(/Type fares to confirm/) as HTMLInputElement).value).toBe("");
     expect(within(dialog).queryByText("The Dot was not deleted")).toBeNull();
+  });
+});
+
+describe("the MCP servers of a Dot", () => {
+  const WEB = { url: "https://web.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 30, startup_timeout_s: 60 };
+  // The panel, not the group of the same name under Permissions and tools.
+  const panel = () => within(screen.getByRole("heading", { level: 2, name: "MCP servers" }).closest("section")!);
+
+  it("shows each server with where it is on the computer, and sets its secret without ever showing it", async () => {
+    plane.dots = [dotRecord("d1", { name: "fares", config: fullConfig({ name: "fares", mcp_servers: { web: WEB } }) })];
+    plane.mcpServers = [{ name: "web", state: "failed", error: "its secret Authorization is not set", tools: 0 }];
+    await renderSettings();
+    const user = userEvent.setup();
+
+    expect(await panel().findByText("Not connected")).toBeTruthy();
+    expect(panel().getByText("its secret Authorization is not set")).toBeTruthy();
+    const secret = await panel().findByLabelText("Authorization");
+    await user.type(secret, "Bearer web-1");
+    await user.click(panel().getByRole("button", { name: "Set" }));
+
+    await waitFor(() => expect(plane.mcpSecretWrites).toEqual([{ server: "web", name: "Authorization", value: "Bearer web-1" }]));
+    await waitFor(() => expect((panel().getByLabelText("Authorization") as HTMLInputElement).value).toBe(""));
+    expect(panel().getByRole("button", { name: "Clear" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("web-1");
+    // Its permission is a row of the permissions, asked by default.
+    expect(chosen("MCP server web")).toBe("ask");
+  });
+
+  it("adds a server through the form, which the review lists and the save writes", async () => {
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(panel().getByRole("button", { name: "Add an MCP server" }));
+    const form = within(screen.getByRole("form", { name: "New MCP server" }));
+    await user.type(form.getByLabelText("Name"), "time");
+    await user.type(form.getByLabelText("Command"), "uvx");
+    await user.type(form.getByLabelText(/^Arguments/), "mcp-server-time");
+    await user.click(form.getByRole("button", { name: "Add" }));
+
+    expect(panel().getByText("uvx mcp-server-time")).toBeTruthy();
+    expect(panel().getByText("Not saved yet.")).toBeTruthy();
+    await saveReviewed();
+    await waitFor(() => expect(saved().mcp_servers).toEqual({ time: { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: [], timeout_s: 120, startup_timeout_s: 60 } }));
+  });
+
+  it("refuses a name a server cannot have, and removes a server with its permission", async () => {
+    plane.dots = [dotRecord("d1", { name: "fares", config: fullConfig({ name: "fares", mcp_servers: { web: WEB }, permissions: { "mcp.web": "allow" } }) })];
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(panel().getByRole("button", { name: "Add an MCP server" }));
+    const form = within(screen.getByRole("form", { name: "New MCP server" }));
+    await user.type(form.getByLabelText("Name"), "Bad_Name");
+    await user.click(form.getByRole("button", { name: "Add" }));
+    expect(form.getByText(/A name is 1 to 32 lowercase letters/)).toBeTruthy();
+    await user.click(form.getByRole("button", { name: "Cancel" }));
+
+    await user.click(panel().getByRole("button", { name: "Remove" }));
+    await saveReviewed();
+    await waitFor(() => expect(saved().mcp_servers).toEqual({}));
+    expect(saved().permissions).toEqual({});
   });
 });

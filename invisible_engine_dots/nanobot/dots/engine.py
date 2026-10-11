@@ -49,6 +49,7 @@ from nanobot.dots import store as dots_store
 from nanobot.dots.browser import CLOSE_TIMEOUT_S, BrowserManager
 from nanobot.dots.computer import Computer
 from nanobot.dots.gate import DotsGate, close_open_calls
+from nanobot.dots.mcp_servers import McpServers
 from nanobot.dots.memory_update import QUIET_S, MemoryUpdater
 from nanobot.dots.permissions import tool_table, tool_target
 from nanobot.dots.projection import EngineSettings, project
@@ -182,6 +183,7 @@ class Engine:
         computer: Computer,
         base_registry: ToolRegistry,
         browser: BrowserManager,
+        mcp_servers: McpServers,
         providers: OpenRouterProviders,
         key_holder: KeyHolder,
         workspace: str,
@@ -192,6 +194,7 @@ class Engine:
         self._store = store
         self._computer = computer
         self._browser = browser
+        self._mcp = mcp_servers
         self._registry = base_registry
         self._key_holder = key_holder
         self._workspace = workspace
@@ -227,6 +230,7 @@ class Engine:
             store=store,
             computer=computer,
             base_registry=base_registry,
+            mcp_servers=mcp_servers,
             providers=providers,
             key_holder=key_holder,
             settings_getter=lambda: self._settings,
@@ -269,9 +273,15 @@ class Engine:
         return self._store.read(answer)
 
     def tool_table(self) -> list[dict[str, Any]]:
-        """The Dot's tools and whether the model is offered each now (none before a config arrived)."""
+        """The Dot's tools and whether the model is offered each now (none before a config arrived): the permission
+        table's, then those of the declared MCP servers that are connected."""
         offered = self._settings.offered_tools if self._settings else ()
-        return tool_table(self._registry, offered)
+        servers = self._settings.mcp_servers if self._settings else ()
+        return [*tool_table(self._registry, offered), *self._mcp.tool_rows(servers)]
+
+    def mcp_status(self) -> list[dict[str, Any]]:
+        """Every MCP server the config declares, and where it is."""
+        return self._mcp.status()
 
     async def skills(self) -> list[dict[str, Any]]:
         """The Dot's skills as `GET /skills` shows them: its own and the built-in ones, each with its whole file."""
@@ -353,13 +363,15 @@ class Engine:
             config, workspace=self._workspace, openrouter_base_url=self._openrouter_base_url
         )
         self._config = config
+        self._mcp.configure(config.mcp_servers)
 
-    def key_received(self) -> None:
-        """The OpenRouter key arrived (`POST /secrets`).
+    def secrets_received(self) -> None:
+        """The OpenRouter key and the MCP servers' secrets arrived (`POST /secrets`).
 
-        The host pushes it on every READY transition, so it also ends a prepare-sleep that no
-        shutdown followed.
+        The host pushes them on every READY transition, so they also end a prepare-sleep that no
+        shutdown followed. A server whose secrets changed is started again with them.
         """
+        self._mcp.secrets_changed()
         if self._suspended and not self._stopped:
             logger.info("resuming work: the host pushed the key, so no shutdown is coming")
         self._suspended = False

@@ -31,9 +31,10 @@ from nanobot.dots.computer import (
     AgentdComputer,
 )
 from nanobot.dots.engine import Engine
+from nanobot.dots.mcp_servers import McpServers
 from nanobot.dots.permissions import ToolDeps, build_registry
 from nanobot.dots.provider import OpenRouterProviders
-from nanobot.dots.secrets import KeyHolder
+from nanobot.dots.secrets import KeyHolder, McpSecrets
 from nanobot.dots.server import AgentServer
 from nanobot.dots.store import DotStore, StoreOwnedError
 from nanobot.utils.token_encoding import warmup_token_encoding
@@ -134,6 +135,7 @@ async def serve(environment: Environment, stop: asyncio.Event) -> None:
     store = DotStore.open(state_dir / "engine.sqlite")
     try:
         key_holder = KeyHolder()
+        mcp_secrets = McpSecrets()
         computer = AgentdComputer(environment.agentd_bin, environment.agentd_socket, environment.workspace)
         exec_sessions = ExecSessionManager()
         cron = CronService(state_dir / "cron" / "jobs.json")
@@ -146,11 +148,14 @@ async def serve(environment: Environment, stop: asyncio.Event) -> None:
             max_identities=DEFAULT_MAX_IDENTITIES,
         )
         registry = build_registry(ToolDeps(computer, exec_sessions, cron, browser))
+        # The MCP servers the person declares: their tools join the registry while they are connected.
+        mcp_servers = McpServers(computer=computer, registry=registry, secrets=mcp_secrets)
         engine = Engine(
             store=store,
             computer=computer,
             base_registry=registry,
             browser=browser,
+            mcp_servers=mcp_servers,
             providers=OpenRouterProviders(),
             key_holder=key_holder,
             workspace=environment.workspace,
@@ -167,6 +172,7 @@ async def serve(environment: Environment, stop: asyncio.Event) -> None:
         server = AgentServer(
             engine=engine,
             key_holder=key_holder,
+            mcp_secrets=mcp_secrets,
             checks=checks,
             refused_uids=refused_uids,
         )
@@ -189,6 +195,8 @@ async def serve(environment: Environment, stop: asyncio.Event) -> None:
             await server.stop_accepting()
             server.close_streams()
             await engine.stop()
+            # No turn is left to call them: the declared MCP servers end (a stdio one's relay, and so its process).
+            await mcp_servers.aclose()
             await exec_sessions.close_all()
             await server.close()
             await computer.aclose()

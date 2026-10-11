@@ -18,3 +18,4 @@ produced the numbers are in the repository, under `tests/bench/` and
 - [Benchmarking an agent on real VMs](benchmarking-agents-on-real-vms.md)
 - [Browser calls that lead nowhere](browser-calls-that-lead-nowhere.md)
 - [The browser server's own tools and words](the-browser-servers-own-words.md)
+- [MCP servers a person declares](mcp-servers-a-person-declares.md)

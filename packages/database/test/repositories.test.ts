@@ -1,6 +1,6 @@
 import { APPROVAL_LIST_LIMIT, newId, parseDotConfig, TASK_LIST_LIMIT, vmName, type OutboundEvent } from "@invisible-dots/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DotChangedError, DotNameTakenError, TransactionMisuseError, type Database, type Repositories } from "../src/index.js";
+import { DotChangedError, DotNameTakenError, mcpSecretName, TransactionMisuseError, type Database, type Repositories } from "../src/index.js";
 import { EventsRepository } from "../src/events.js";
 import { loadMigrations } from "../src/migrate.js";
 import { createTestDatabase, testAdapters, type TestDatabase } from "../src/testing.js";
@@ -754,6 +754,22 @@ describe.each(testAdapters())("repositories on %s", { timeout: SETUP_TIMEOUT }, 
     expect(await db.secrets.delete(dot.id, "openrouter_api_key")).toBe(true);
     expect(await db.secrets.openRouterKey(dot.id)).toBe("sk-global");
     expect(await db.holdsEncryptedValues()).toBe(true);
+  });
+
+  it("MCP secrets: read by the names a config gives, and none kept that the config no longer names", async () => {
+    const dot = await seedDot(db, "mcp-secrets");
+    await db.secrets.put(dot.id, mcpSecretName("time", "TOKEN"), "tok-1");
+    await db.secrets.put(dot.id, mcpSecretName("web", "Authorization"), "Bearer w-1");
+    await db.secrets.put(dot.id, mcpSecretName("gone", "KEY"), "k-1");
+    await db.secrets.put(dot.id, "openrouter_api_key", "sk-dot");
+    const servers = { time: { secrets: ["TOKEN", "UNSET"] }, web: { secrets: ["Authorization"] } };
+
+    expect(await db.secrets.mcpSecrets(dot.id, servers)).toEqual({ time: { TOKEN: "tok-1" }, web: { Authorization: "Bearer w-1" } });
+
+    await db.secrets.deleteUndeclaredMcpSecrets(dot.id, { time: { secrets: ["TOKEN"] } });
+    const { rows } = await db.query<{ name: string }>("SELECT name FROM secrets WHERE scope = $1 ORDER BY name", [dot.id]);
+    // The server and the name the config dropped go; what is not an MCP secret is not this method's.
+    expect(rows.map((row) => row.name)).toEqual(["mcp/time/TOKEN", "openrouter_api_key"]);
   });
 
   it("deleting a Dot cascades to its computer, tasks and approvals but keeps its events", async () => {

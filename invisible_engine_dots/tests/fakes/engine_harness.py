@@ -18,7 +18,8 @@ from nanobot.dots import store as s
 from nanobot.dots.engine import Engine
 from nanobot.dots.permissions import ToolDeps, build_registry
 from nanobot.dots.protocol import InboundEvent, parse_inbound_event
-from nanobot.dots.secrets import KeyHolder
+from nanobot.dots.mcp_servers import McpServers
+from nanobot.dots.secrets import KeyHolder, McpSecrets
 from nanobot.dots.store import DotStore
 
 TS = "2026-10-04T10:00:00.000Z"
@@ -66,6 +67,7 @@ class EngineHarness:
         self.provider = ScriptedProvider(script)
         self.providers = FixedProviders(self.provider)
         self.keys = KeyHolder()
+        self.mcp_secrets = McpSecrets()
         if key:
             self.keys.set(KEY)
         workspace = tmp_path / "home" / "dot" / "workspace"
@@ -91,11 +93,14 @@ class EngineHarness:
                 browser=self.browser,
             )
         )
+        # A restarted process has no MCP server started either.
+        self.mcp_servers = McpServers(computer=self.computer, registry=registry, secrets=self.mcp_secrets)
         engine = Engine(
             store=self.store,
             computer=self.computer,
             base_registry=registry,
             browser=self.browser,
+            mcp_servers=self.mcp_servers,
             providers=self.providers,
             key_holder=self.keys,
             workspace=self.computer.workspace,
@@ -114,7 +119,7 @@ class EngineHarness:
 
     def give_key(self) -> None:
         self.keys.set(KEY)
-        self.engine.key_received()
+        self.engine.secrets_received()
 
     async def idle(self) -> None:
         """Return when no turn is in flight, counting the turns the end of one starts."""

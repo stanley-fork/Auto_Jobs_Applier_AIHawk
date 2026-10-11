@@ -18,8 +18,10 @@ import { ConfigYamlEditor } from "../yaml-editor";
 import { DeleteDot } from "./delete-dot";
 import { ComputerPanel, GeneralPanel, LimitsPanel, ModelPanel } from "./panels";
 import type { PanelProps } from "./panel";
+import { McpServersPanel } from "./mcp-servers-panel";
 import { PermissionsPanel } from "./permissions-panel";
 import { ReviewDialog } from "./review-dialog";
+import { useToolTable } from "./tool-table";
 import { VmProxy } from "./vm-proxy";
 
 type Mode = "form" | "yaml";
@@ -59,6 +61,8 @@ function Editor({
   const [refusal, setRefusal] = useState<FormIssue[] | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const save = useAction();
+  // The engine's tool table: the permissions panel lists each permission's tools, the MCP panel each server's state.
+  const table = useToolTable(dotId, computerState);
 
   const issues = useMemo(() => configIssues(mode === "form" ? state.draft : yaml), [mode, state.draft, yaml]);
   const valid = issues.length === 0;
@@ -159,7 +163,8 @@ function Editor({
         <>
           <GeneralPanel {...panel} />
           <ModelPanel {...panel} />
-          <PermissionsPanel {...panel} dotId={dotId} computerState={computerState} />
+          <PermissionsPanel {...panel} computerState={computerState} table={table} />
+          <McpServersPanel {...panel} dotId={dotId} computerState={computerState} table={table} />
           <ComputerPanel {...panel} />
           <LimitsPanel {...panel} />
         </>

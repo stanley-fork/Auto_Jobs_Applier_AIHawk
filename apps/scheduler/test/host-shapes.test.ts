@@ -35,6 +35,20 @@ computer:
 permissions:
   computer.exec: deny
   files.write: ask
+  mcp.time: allow
+mcp_servers:
+  time:
+    command: uvx
+    args: [mcp-server-time, --local-timezone, Europe/Rome]
+    env:
+      LOG_LEVEL: warning
+    secrets: [TIME_TOKEN]
+  search:
+    url: https://search.example/mcp
+    headers:
+      X-Client: dots
+    secrets: [Authorization]
+    timeout_s: 30
 limits:
   max_steps_per_task: 30
   max_cost_per_task_usd: 2.5
@@ -76,6 +90,12 @@ describe("what the host sends the engine", () => {
       const dot = await readyDot(yaml, name);
       configs.push({ name, config: structuredClone(driver.guestOf(dot.id).config) });
     }
+    // The secrets of the full config's servers, set as the person sets them: the push carries them with the key.
+    const full = await scheduler.requireDot("shapes-full");
+    await scheduler.setMcpSecret(full.id, "time", "TIME_TOKEN", "tt-1");
+    await scheduler.setMcpSecret(full.id, "search", "Authorization", "Bearer sk-search-1");
+    const fullGuest = driver.guestOf(full.id);
+    const secrets_requests = [{ openrouter_api_key: fullGuest.openrouterKey, mcp_secrets: structuredClone(fullGuest.mcpSecrets) }];
 
     const dot = await readyDot("name: shapes-talk\nmodel:\n  provider: openrouter\n  id: test/model\n", "shapes-talk");
     const guest = driver.guestOf(dot.id);
@@ -103,7 +123,7 @@ describe("what the host sends the engine", () => {
     const inbound_events = (JSON.parse(
       [...named].reduce((text, [id, name]) => text.replaceAll(id, name), JSON.stringify(guest.inbound.map((event) => ({ type: event.type, data: event.data })))),
     ) as { type: string; data: Record<string, unknown> }[]);
-    return { runtime_configs: configs, inbound_events };
+    return { runtime_configs: configs, secrets_requests, inbound_events };
   }
 
   it("writes what the host's own writers sent, as the file the engine's parsers check", async () => {
@@ -119,7 +139,9 @@ describe("what the host sends the engine", () => {
     const priorities = written.inbound_events.filter((event) => event.type === "task.created").map((event) => event.data.priority);
     expect(priorities).toEqual([5, 0]);
     const [minimal, full] = written.runtime_configs.map((entry) => entry.config as Record<string, unknown>);
-    expect(Object.keys(full!).sort()).toEqual(["instructions", "limits", "model", "models", "name", "permissions"]);
+    expect(Object.keys(full!).sort()).toEqual(["instructions", "limits", "mcp_servers", "model", "models", "name", "permissions"]);
+    expect(Object.keys(full!.mcp_servers as object).sort()).toEqual(["search", "time"]);
+    expect(written.secrets_requests[0]!.mcp_secrets).toEqual({ time: { TIME_TOKEN: "tt-1" }, search: { Authorization: "Bearer sk-search-1" } });
     expect(Object.keys(minimal!)).not.toContain("instructions");
     expect(minimal).not.toHaveProperty("computer");
   });

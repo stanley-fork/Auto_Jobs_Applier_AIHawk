@@ -2,6 +2,54 @@
   "limits": {
     "max_run_at_ms": 253402300799999
   },
+  "mcp": {
+    "mcp_servers": [
+      {
+        "error": "its secret API_TOKEN is not set: the person sets it in the Dot's settings",
+        "name": "keyed",
+        "state": "failed",
+        "tools": 0
+      },
+      {
+        "error": null,
+        "name": "tools",
+        "state": "connected",
+        "tools": 5
+      }
+    ],
+    "tools": [
+      {
+        "description": "Repeat a text.",
+        "name": "mcp_tools_echo",
+        "offered": true,
+        "permission": "mcp.tools"
+      },
+      {
+        "description": "Read one of the server's environment variables.",
+        "name": "mcp_tools_env",
+        "offered": true,
+        "permission": "mcp.tools"
+      },
+      {
+        "description": "Read one header of the request this call came in.",
+        "name": "mcp_tools_header",
+        "offered": true,
+        "permission": "mcp.tools"
+      },
+      {
+        "description": "Answer with a picture.",
+        "name": "mcp_tools_picture",
+        "offered": true,
+        "permission": "mcp.tools"
+      },
+      {
+        "description": "End the server's process.",
+        "name": "mcp_tools_exit",
+        "offered": true,
+        "permission": "mcp.tools"
+      }
+    ]
+  },
   "outbound_events": [
     {
       "data": {},

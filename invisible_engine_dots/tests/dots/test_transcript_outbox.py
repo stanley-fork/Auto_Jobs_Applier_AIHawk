@@ -309,10 +309,14 @@ class TestToolResults:
         assert transcript.events()[0][1]["ok"] is False
 
     def test_a_tool_that_is_not_the_dots_reports_no_permission(self, transcript: Transcript) -> None:
-        transcript.append(CHAT, tool_result("call-1", "mcp_x_y"))
+        transcript.append(CHAT, tool_result("call-1", "web_fetch"))
         assert transcript.events()[0][1]["permission"] == ""
         transcript.append(CHAT, {"role": "tool", "tool_call_id": "call-2", "content": "x"})
         assert transcript.events()[1][1]["tool"] == "unknown"
+
+    def test_a_tool_of_a_declared_mcp_server_reports_the_servers_permission(self, transcript: Transcript) -> None:
+        transcript.append(CHAT, tool_result("call-1", "mcp_time-zones_get_current_time"))
+        assert transcript.events()[0][1]["permission"] == "mcp.time-zones"
 
     def test_reports_the_gates_decision_nothing_for_a_parked_call_and_ask_for_the_approved_call(
         self, dot_store: DotStore, transcript: Transcript

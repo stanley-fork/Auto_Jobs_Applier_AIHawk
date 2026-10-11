@@ -374,7 +374,7 @@ class TestTheEngineServed:
         assert json.loads(health)["checks"]["network_reachable"] is True
 
         assert (await served.call("PUT", "/config", runtime_config_body(permissions={"files.read": "allow"})))[0] == 204
-        assert (await served.call("POST", "/secrets", {"openrouter_api_key": "sk-or-served"}))[0] == 204
+        assert (await served.call("POST", "/secrets", {"openrouter_api_key": "sk-or-served", "mcp_secrets": {}}))[0] == 204
         event = {"id": "m1", "type": "user.message", "ts": TS, "data": {"text": "ping"}}
         assert (await served.call("POST", "/events", event))[0] == 202
         events = await asyncio.wait_for(next_events(served, 0, 6), 30)

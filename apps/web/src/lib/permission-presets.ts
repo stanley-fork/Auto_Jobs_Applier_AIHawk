@@ -4,7 +4,7 @@
  * permission it leaves out keeps the shipped default (`resolvePermission` in the shared package), so a preset can
  * never disagree with the defaults about a permission it does not name.
  */
-import { PERMISSIONS, resolvePermission, type Permission, type PermissionDecision } from "@invisible-dots/shared/browser";
+import { mcpServerOf, PERMISSIONS, resolvePermission, type Permission, type PermissionDecision } from "@invisible-dots/shared/browser";
 
 export type PermissionMap = Partial<Record<string, PermissionDecision>>;
 
@@ -41,9 +41,13 @@ export const PRESETS: Readonly<Record<PresetId, Preset>> = {
   },
 };
 
-/** The permissions a preset writes into a config: a copy, so nobody edits the preset by accident. */
-export function presetPermissions(id: PresetId): Record<string, PermissionDecision> {
-  return { ...PRESETS[id].permissions } as Record<string, PermissionDecision>;
+/**
+ * The permissions a config has once a preset is chosen: the preset's (a copy, so nobody edits the preset by accident),
+ * and the permissions of its MCP servers as they were, which no preset is about: what a server's tools do is the server's.
+ */
+export function presetPermissions(id: PresetId, current: PermissionMap = {}): Record<string, PermissionDecision> {
+  const servers = Object.entries(current).filter(([permission, decision]) => mcpServerOf(permission) !== null && decision !== undefined);
+  return { ...(Object.fromEntries(servers) as Record<string, PermissionDecision>), ...PRESETS[id].permissions } as Record<string, PermissionDecision>;
 }
 
 function decisions(permissions: PermissionMap): PermissionDecision[] {

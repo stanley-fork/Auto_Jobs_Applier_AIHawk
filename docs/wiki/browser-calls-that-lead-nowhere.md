@@ -96,7 +96,8 @@ the browser server: see
 - **The two timeouts belong to the library.** The 31-second failure matches
   the 30 seconds `invisible_playwright` gives `Browser.newPage`, which the first
   navigation of a launch calls, while the navigation itself has 45. It is
-  reported there, not worked around in the engine.
+  reported there ([invisible_playwright#321](https://github.com/feder-cr/invisible_playwright/issues/321)),
+  not worked around in the engine.
 - **The reads that fail right after a Google search** are not explained. The
   events do not keep the error text, and a probe with the local copy of the
   library (older than the Dots') did not reproduce it.
