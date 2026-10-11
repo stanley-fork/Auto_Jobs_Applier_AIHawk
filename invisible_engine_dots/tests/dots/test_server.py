@@ -105,7 +105,7 @@ async def make_api(make_engine: MakeEngine) -> AsyncIterator[Callable[..., Any]]
         # A short directory: a unix socket path has a small limit that pytest's tmp_path can exceed.
         directory = Path(tempfile.mkdtemp(prefix="dots-sock-"))
         socket_path = directory / "agent.sock"
-        server = AgentServer(engine=h.engine, key_holder=h.keys, checks=fixed_checks, **options)
+        server = AgentServer(engine=h.engine, key_holder=h.keys, mcp_secrets=h.mcp_secrets, checks=fixed_checks, **options)
         await server.listen(socket_path)
         api = Api(h, server, socket_path)
 
@@ -131,7 +131,7 @@ class TestTheSocket:
         directory = Path(tempfile.mkdtemp(prefix="dots-sock-"))
         socket_path = directory / "agent.sock"
         socket_path.write_bytes(b"left by a crash")
-        server = AgentServer(engine=h.engine, key_holder=h.keys, checks=fixed_checks)
+        server = AgentServer(engine=h.engine, key_holder=h.keys, mcp_secrets=h.mcp_secrets, checks=fixed_checks)
         try:
             await server.listen(socket_path)
             mode = stat.S_IMODE(os.stat(socket_path).st_mode)
@@ -154,7 +154,7 @@ class TestThePeer:
             await api.call("GET", "/health"),
             await api.call("PUT", "/config", runtime_config_body(permissions=ALLOW_ALL)),
             await api.call("POST", "/events", event),
-            await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1"}),
+            await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {}}),
             await api.call("POST", "/prepare-sleep"),
             await api.call("GET", "/events/stream?after=0"),
         ]
@@ -245,13 +245,13 @@ class TestSecrets:
         lines: list[str] = []
         sink = logger.add(lines.append, format="{message}", level="DEBUG")
         try:
-            refused = await api.call("POST", "/secrets", {"openrouter_api_key": "  "})
+            refused = await api.call("POST", "/secrets", {"openrouter_api_key": "  ", "mcp_secrets": {}})
             not_json = await api.call("POST", "/secrets", "{not json sk-or-secret")
             empty = await api.call("POST", "/secrets", "")
-            wrong_type = await api.call("POST", "/secrets", {"openrouter_api_key": 5})
-            accepted = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1"})
-            again = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1"})
-            replaced = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-2"})
+            wrong_type = await api.call("POST", "/secrets", {"openrouter_api_key": 5, "mcp_secrets": {}})
+            accepted = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {}})
+            again = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {}})
+            replaced = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-2", "mcp_secrets": {}})
         finally:
             logger.remove(sink)
 
@@ -278,7 +278,7 @@ class TestSecrets:
         sink = logger.add(lines.append, format="{message}", level="DEBUG", backtrace=True, diagnose=False)
         try:
             # A newline inside the key survives the host's trim; httpx would refuse the request it is in.
-            refused = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-v1-SECRETHEAD\nSECRETTAIL"})
+            refused = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-v1-SECRETHEAD\nSECRETTAIL", "mcp_secrets": {}})
         finally:
             logger.remove(sink)
 
@@ -287,13 +287,40 @@ class TestSecrets:
         assert "SECRET" not in "".join(lines)
         assert (await api.call("GET", "/health")).json["openrouter_configured"] is False
 
+    async def test_mcp_secrets_are_held_with_the_key_and_a_bad_one_refuses_both_unechoed(
+        self, make_api: Callable[..., Any]
+    ) -> None:
+        api: Api = await make_api(key=False)
+        lines: list[str] = []
+        sink = logger.add(lines.append, format="{message}", level="DEBUG")
+        try:
+            missing = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1"})
+            broken = await api.call(
+                "POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {"time": {"TOKEN": "tok-SECRET\nX"}}}
+            )
+            named = await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {"Bad_Name": {}}})
+            held = await api.call(
+                "POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {"time": {"TOKEN": "Bearer tok-SECRET"}}}
+            )
+        finally:
+            logger.remove(sink)
+
+        for refused in (missing, broken, named):
+            assert (refused.status, refused.json["error"]) == (400, "invalid_secret")
+            assert "SECRET" not in refused.text
+        # A refused push held nothing, not even its key.
+        assert held.status == 204
+        assert api.h.mcp_secrets.of("time") == {"TOKEN": "Bearer tok-SECRET"}
+        assert "SECRET" not in "".join(lines)
+        assert "MCP secrets changed" in "".join(lines)
+
     async def test_the_key_ends_a_prepare_sleep(self, make_api: Callable[..., Any]) -> None:
         api: Api = await make_api()
         await api.call("PUT", "/config", runtime_config_body(permissions={}))
         assert (await api.call("POST", "/prepare-sleep")).status == 204
         assert api.h.engine.is_suspending()
 
-        await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1"})
+        await api.call("POST", "/secrets", {"openrouter_api_key": "sk-or-1", "mcp_secrets": {}})
 
         assert not api.h.engine.is_suspending()
 
@@ -856,6 +883,8 @@ class TestStateAndTheRest:
 
         rows = {row["name"]: row for row in answer.json["tools"]}
         assert answer.status == 200 and set(rows) == set(TOOL_PERMISSIONS)
+        # The config declares no MCP server: none is listed, and no tool of one.
+        assert answer.json["mcp_servers"] == []
         assert {name for name, row in rows.items() if row["offered"]} == set(offered_tools(permissions))
         assert rows["exec"]["permission"] == "computer.exec" and rows["exec"]["offered"] is True
         assert rows["grep"]["offered"] is True and rows["write_file"]["offered"] is False

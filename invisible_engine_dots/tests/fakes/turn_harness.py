@@ -19,7 +19,8 @@ from nanobot.dots.permissions import ToolDeps, build_registry
 from nanobot.dots.projection import EngineSettings, project
 from nanobot.dots.protocol import DotRuntimeConfig
 from nanobot.dots.provider import OpenRouterProviders
-from nanobot.dots.secrets import KeyHolder
+from nanobot.dots.mcp_servers import McpServers
+from nanobot.dots.secrets import KeyHolder, McpSecrets
 from nanobot.dots.store import DotStore
 from nanobot.dots.turns import OpeningMessage, TurnOutcome, TurnRunner, TurnUnit
 
@@ -97,10 +98,13 @@ class Harness:
                 browser=self.browser,
             )
         )
+        self.mcp_secrets = McpSecrets()
+        self.mcp_servers = McpServers(computer=self.computer, registry=registry, secrets=self.mcp_secrets)
         self.runner = TurnRunner(
             store=store,
             computer=self.computer,
             base_registry=registry,
+            mcp_servers=self.mcp_servers,
             providers=self.providers,
             key_holder=self.keys,
             settings_getter=self._settings,

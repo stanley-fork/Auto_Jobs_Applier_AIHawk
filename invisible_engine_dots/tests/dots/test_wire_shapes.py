@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 from fakes.dot_config import ALLOW_ALL, runtime_config_body
 from fakes.engine_harness import EngineHarness, task_cancelled, task_created, user_message
+from fakes.fake_tool_server import install_fake_tool_server
 from fakes.scripted_provider import ScriptEntry, call, calls, says
 
 from nanobot.cron.types import MAX_RUN_AT_MS
@@ -147,7 +148,7 @@ def _stable(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pinned
 
 
-def _shapes(outbound_events: list[dict[str, Any]]) -> dict[str, Any]:
+def _shapes(outbound_events: list[dict[str, Any]], mcp_answer: dict[str, Any]) -> dict[str, Any]:
     cases = []
     for case in _OFFERED_CASES:
         offered = offered_tools(case["permissions"])
@@ -156,6 +157,9 @@ def _shapes(outbound_events: list[dict[str, Any]]) -> dict[str, Any]:
         "limits": {"max_run_at_ms": MAX_RUN_AT_MS},
         "outbound_events": outbound_events,
         "tool_offering": cases,
+        # What `GET /tools` adds for the MCP servers a config declares: the rows of a connected server's tools, and
+        # every server's state (one connected, one waiting for its secret).
+        "mcp": mcp_answer,
         # What `GET /skills` answers for a Dot that wrote none of its own (Engine.skills), the path made stable.
         "skills": [
             {"name": s.name, "description": s.description, "source": s.source, "path": f"/engine/skills/{s.name}/SKILL.md", "content": s.content}
@@ -169,8 +173,32 @@ async def outbound_events(make_engine: MakeEngine) -> list[dict[str, Any]]:
     return _stable(await _engine_events(make_engine))
 
 
-def test_the_answers_of_the_engine_are_the_ones_the_host_checks(outbound_events: list[dict[str, Any]]) -> None:
-    shapes = _shapes(outbound_events)
+@pytest.fixture
+async def mcp_answer(make_engine: MakeEngine, tmp_path: Path) -> dict[str, Any]:
+    h = make_engine()
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    program = str(install_fake_tool_server(tmp_path / "bin"))
+    h.configure(
+        runtime_config_body(
+            permissions={"mcp.tools": "ask"},
+            mcp_servers={
+                "tools": {"command": program, "timeout_s": 30},
+                "keyed": {"command": program, "secrets": ["API_TOKEN"], "timeout_s": 30},
+            },
+        )
+    )
+    await h.mcp_servers.ready()
+    try:
+        rows = [row for row in h.engine.tool_table() if row["permission"].startswith("mcp.")]
+        return {"tools": rows, "mcp_servers": h.engine.mcp_status()}
+    finally:
+        await h.mcp_servers.aclose()
+
+
+def test_the_answers_of_the_engine_are_the_ones_the_host_checks(
+    outbound_events: list[dict[str, Any]], mcp_answer: dict[str, Any]
+) -> None:
+    shapes = _shapes(outbound_events, mcp_answer)
     text = json.dumps(shapes, indent=2, sort_keys=True) + "\n"
     if os.environ.get("UPDATE_WIRE_SHAPES") == "1":
         FIXTURE.write_bytes(text.encode("utf-8"))
@@ -178,8 +206,8 @@ def test_the_answers_of_the_engine_are_the_ones_the_host_checks(outbound_events:
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == shapes
 
 
-def test_the_cases_reach_every_kind_of_tool(outbound_events: list[dict[str, Any]]) -> None:
-    shapes = _shapes(outbound_events)
+def test_the_cases_reach_every_kind_of_tool(outbound_events: list[dict[str, Any]], mcp_answer: dict[str, Any]) -> None:
+    shapes = _shapes(outbound_events, mcp_answer)
     for case in shapes["tool_offering"]:
         assert [row["name"] for row in case["tools"]] == list(TOOL_PERMISSIONS)
 

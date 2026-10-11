@@ -19,6 +19,7 @@ def runtime_config_body(**overrides: Any) -> dict[str, Any]:
         "model": {"provider": "openrouter", "id": "z-ai/glm-5.3-flash"},
         "permissions": {},
         "limits": {"max_steps_per_task": 60, "max_cost_per_task_usd": 1},
+        "mcp_servers": {},
     }
     body.update(overrides)
     return body

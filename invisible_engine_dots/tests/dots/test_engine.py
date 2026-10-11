@@ -1583,7 +1583,7 @@ class TestStoppingWithBrowsersOpen:
         await h.engine.suspend()
         assert closed == ["closed"]
 
-        h.engine.key_received()
+        h.engine.secrets_received()
         closed.clear()
         await h.engine.stop()
         assert closed == []

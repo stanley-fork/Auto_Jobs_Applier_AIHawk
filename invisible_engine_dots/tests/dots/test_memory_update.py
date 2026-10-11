@@ -331,7 +331,7 @@ class TestTheEngine:
         await h.engine.suspend()
 
         assert h.engine._memory_pass is None and "memory.updated" not in h.types()
-        h.engine.key_received()
+        h.engine.secrets_received()
         await h.wait_until(lambda: "memory.updated" in h.types())
         assert h.asked() == 2
         await h.engine.stop()

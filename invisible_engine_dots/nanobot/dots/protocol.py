@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 # Routes of `/run/invisible-dots-agent/agent.sock`, reached by the host as `/v1/agent/...`.
 AGENT_ROUTES = {
@@ -130,6 +130,17 @@ TASK_CANCELLED_EVENT = "task.cancelled"
 # texts equal, so each is written as one plain string literal.
 OPENROUTER_KEY_PATTERN = "[!-~]+"
 OPENROUTER_KEY_RULE = "the key must be printable ASCII without spaces, as it travels in a header"
+
+# How an MCP server of the Dot's config is named (MCP_SERVER_NAME_PATTERN in packages/shared tools.ts): the prefix of
+# its tools, `mcp_<server>_<tool>`, and of its permission, `mcp.<server>`. It holds no `_`, so a tool's name says its
+# server. What one of its secrets is made of (MCP_SECRET_PATTERN and MCP_SECRET_RULE in protocol.ts), which the host
+# applies when the person sets it and the guest again on `POST /secrets`. tests/repo/vendored-nanobot.test.ts keeps
+# the three equal, so each is one plain string literal.
+MCP_SERVER_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,31}$"
+MCP_SECRET_PATTERN = "[ -~]+"
+MCP_SECRET_RULE = "a secret must be printable ASCII, as it travels in an environment variable or a header"
+# Where a declared MCP server is, as `GET /tools` says it (MCP_SERVER_STATES in protocol.ts).
+MCP_SERVER_STATES = ("connecting", "connected", "failed")
 
 
 class InvalidEvent(ValueError):
@@ -285,6 +296,33 @@ class LimitsConfig(_Open):
     max_cost_per_task_usd: Annotated[float, Field(strict=True, gt=0)]
 
 
+StrictStr = Annotated[str, Field(strict=True)]
+
+
+class McpStdioServer(_Open):
+    """An MCP server the engine starts on the Dot's computer and talks to over its standard input and output."""
+
+    command: NonEmptyStr
+    args: list[StrictStr] = Field(default_factory=list)
+    env: dict[str, StrictStr] = Field(default_factory=dict)
+    # Names of environment variables whose values are the Dot's secrets (`POST /secrets`), never in the config.
+    secrets: list[NonEmptyStr] = Field(default_factory=list)
+    timeout_s: PositiveInt
+
+
+class McpHttpServer(_Open):
+    """An MCP server the engine reaches over streamable HTTP, or SSE for a URL ending in /sse."""
+
+    url: Annotated[str, Field(strict=True, pattern=r"^[Hh][Tt][Tt][Pp][Ss]?://")]
+    headers: dict[str, StrictStr] = Field(default_factory=dict)
+    # Names of headers whose values are the Dot's secrets.
+    secrets: list[NonEmptyStr] = Field(default_factory=list)
+    timeout_s: PositiveInt
+
+
+McpServerSpec = McpStdioServer | McpHttpServer
+
+
 class DotRuntimeConfig(_Open):
     """The Dot configuration minus `computer` (architecture section 7).
 
@@ -298,6 +336,30 @@ class DotRuntimeConfig(_Open):
     models: dict[str, NonEmptyStr] | None = None
     permissions: dict[str, Literal["allow", "ask", "deny"]]
     limits: LimitsConfig
+    # The MCP servers the person declared, by name. A config stored by a release that had none
+    # (the engine keeps the last one pushed and reads it at start) declares none.
+    mcp_servers: dict[str, McpServerSpec] = Field(default_factory=dict)
+
+    @field_validator("mcp_servers", mode="before")
+    @classmethod
+    def _servers_are_named_and_of_one_kind(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        parsed: dict[str, Any] = {}
+        for name, server in value.items():
+            if not isinstance(name, str) or re.fullmatch(MCP_SERVER_NAME_PATTERN, name) is None:
+                raise ValueError(f'"{name}" is not an MCP server name')
+            # Which kind is the entry's own say, so a mistake in it is reported against that kind.
+            kind = McpStdioServer if isinstance(server, dict) and "command" in server else McpHttpServer
+            parsed[name] = kind.model_validate(server)
+        return parsed
+
+    @model_validator(mode="after")
+    def _server_permissions_are_of_declared_servers(self) -> DotRuntimeConfig:
+        for permission in self.permissions:
+            if permission.startswith("mcp.") and permission[len("mcp.") :] not in self.mcp_servers:
+                raise ValueError(f'"{permission}" is the permission of an MCP server the config does not declare')
+        return self
 
     @field_validator("instructions")
     @classmethod

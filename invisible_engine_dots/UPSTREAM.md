@@ -238,3 +238,15 @@ every other command). It is described in docs/architecture.md, section 8.8.
   after every change and every tick; a failure of the callback is logged and the jobs go on. The Dot
   uses it to tell the host (`Engine.automations_next_run`, the `automation.next_run` event; docs/architecture.md
   sections 5.4, 8.8 and 9.5).
+
+## What the MCP servers change: the servers a person declares
+
+- agent/tools/mcp.py: a connection keeps what its server said at `initialize`
+  (`MCPProvider.instructions(name)`), which upstream's client discarded, so the Dot's prompt carries a
+  server's instructions as Claude Code and opencode carry them. `connect_mcp_servers(failures=...)` and
+  `MCPProvider.failure(name)` say in one line why a server did not connect (the innermost error of a
+  group, an unreachable URL, a cancelled connection); upstream's status reports were removed in the
+  second cut, and this is the one thing of them the Dot reads. `connect_mcp_servers(errlogs=...)` and
+  `MCPProvider(errlogs=...)` give a stdio server the file its standard error goes to, the engine's own
+  otherwise. The Dot's servers are `nanobot/dots/mcp_servers.py`'s (docs/architecture.md sections 7 and
+  8.3).

@@ -42,6 +42,7 @@ from nanobot.dots import store as dots_store
 from nanobot.dots.computer import Computer, ComputerError, Entry, FileTooLargeError
 from nanobot.dots.gate import close_open_calls
 from nanobot.dots.images import TurnImages, bind_turn_images, reset_turn_images
+from nanobot.dots.mcp_servers import McpServers
 from nanobot.dots.permissions import tool_starts_terminal, tool_target
 from nanobot.dots.projection import EngineSettings
 from nanobot.dots.provider import OpenRouterProviders
@@ -225,6 +226,7 @@ class TurnRunner:
         store: DotStore,
         computer: Computer,
         base_registry: ToolRegistry,
+        mcp_servers: McpServers,
         providers: OpenRouterProviders,
         key_holder: KeyHolder,
         settings_getter: Callable[[], EngineSettings | None],
@@ -236,6 +238,7 @@ class TurnRunner:
         self._store = store
         self._computer = computer
         self._base_registry = base_registry
+        self._mcp = mcp_servers
         self._providers = providers
         self._key_holder = key_holder
         self._settings_getter = settings_getter
@@ -294,6 +297,8 @@ class TurnRunner:
 
         session = self._store.write(open_turn)
         history = session.get_history()
+        # The declared MCP servers: those that failed are started again, and the turn waits for those starting.
+        await self._mcp.ready()
         rows_at_start = len(session.messages)
 
         spend = TurnSpend(
@@ -306,7 +311,7 @@ class TurnRunner:
         # the same metered provider, so its cost counts; it works within its own limits.
         summary_model = settings.model_for("summary")
         summary_runtime = LLMRuntime.at_model_limits(provider, summary_model, await limits_of(provider, summary_model))
-        tools = self._base_registry.view(settings.offered_tools)
+        tools = self._base_registry.view([*settings.offered_tools, *self._mcp.tool_names(settings.mcp_servers)])
         # What the tools of this turn returned for the model to look at, and the transcript does not keep.
         images = TurnImages()
         builder = ContextBuilder(
@@ -321,6 +326,8 @@ class TurnRunner:
             browser_instructions=browser_tools.INSTRUCTIONS
             if any(name in browser_tools.SERVER_TOOLS for name in settings.offered_tools)
             else "",
+            # The declared MCP servers whose tools may be offered: their instructions, or why they are not connected.
+            mcp_servers=self._mcp.prompt_servers(settings.mcp_servers),
         )
 
         async def commit(payload: dict[str, Any]) -> None:
@@ -425,6 +432,7 @@ class TurnRunner:
         """
 
         key = [self._key_holder.require()] if self._key_holder.configured else []
+        key += self._mcp.secret_values()
 
         def read(conn: sqlite3.Connection) -> tuple[dict[str, str], int]:
             written = dots_store.read_kv(conn, conversations.KV_CHAT_WRITTEN)

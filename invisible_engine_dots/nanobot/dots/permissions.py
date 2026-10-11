@@ -11,6 +11,13 @@ an approval request may carry (`tool_arguments`).
 The browser tools are rows like the others. Every one of them is served by the
 BrowserManager (browser.py) and so by `invisible-playwright-mcp`, the only
 browser of a Dot: a tool that browses another way has no row to be in.
+
+The tools of the MCP servers the person declares (mcp_servers.py) have no row:
+which they are is the servers' to say, at run time. Each is named
+`mcp_<server>_<tool>` and exercises the permission of its server,
+`mcp.<server>`, which the host resolves like any other (ask unless the config
+says otherwise); its call shows no target, and an approval shows all of its
+arguments.
 """
 
 from __future__ import annotations
@@ -211,10 +218,34 @@ TOOL_PERMISSIONS: Mapping[str, ToolEntry] = MappingProxyType(
 )
 
 
+# The prefix of the tools of a declared MCP server, as nanobot's client names them: `mcp_<server>_<tool>`.
+MCP_TOOL_PREFIX = "mcp_"
+
+
+def mcp_server_of_tool(tool_name: str) -> str | None:
+    """The server a tool of a declared MCP server belongs to, from its name; None for any other tool.
+
+    A server's name has no `_` (protocol.MCP_SERVER_NAME_PATTERN) and the client keeps the prefix whole when it
+    shortens a long name, so the first `_` after the prefix ends the server's name.
+    """
+    if not tool_name.startswith(MCP_TOOL_PREFIX):
+        return None
+    server, separator, tool = tool_name[len(MCP_TOOL_PREFIX) :].partition("_")
+    return server if server and separator and tool else None
+
+
+def mcp_permission(server: str) -> str:
+    """The permission of a declared MCP server's tools."""
+    return f"mcp.{server}"
+
+
 def tool_permission(tool_name: str) -> str:
     """The permission a tool exercises, or "" for a tool that is not the Dot's."""
     entry = TOOL_PERMISSIONS.get(tool_name)
-    return entry.permission if entry else ""
+    if entry is not None:
+        return entry.permission
+    server = mcp_server_of_tool(tool_name)
+    return mcp_permission(server) if server is not None else ""
 
 
 def tool_target(tool_name: str, params: Any) -> str | None:
@@ -245,9 +276,14 @@ def tool_arguments(tool_name: str, params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def offered_tools(permissions: Mapping[str, str]) -> list[str]:
-    """The tools the model is offered, sorted: those whose permission is allow or ask (a permission missing
-    from the map is deny)."""
+    """The tools of the table the model is offered, sorted: those whose permission is allow or ask (a permission
+    missing from the map is deny)."""
     return sorted(name for name, entry in TOOL_PERMISSIONS.items() if permissions.get(entry.permission) in ("allow", "ask"))
+
+
+def offered_mcp_servers(servers: Collection[str], permissions: Mapping[str, str]) -> list[str]:
+    """The declared MCP servers whose tools the model is offered, by name: permission allow or ask."""
+    return sorted(server for server in servers if permissions.get(mcp_permission(server)) in ("allow", "ask"))
 
 
 def tool_table(registry: ToolRegistry, offered: Collection[str]) -> list[dict[str, Any]]:
