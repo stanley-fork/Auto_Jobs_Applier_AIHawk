@@ -182,8 +182,8 @@ async def mcp_answer(make_engine: MakeEngine, tmp_path: Path) -> dict[str, Any]:
         runtime_config_body(
             permissions={"mcp.tools": "ask"},
             mcp_servers={
-                "tools": {"command": program, "timeout_s": 30},
-                "keyed": {"command": program, "secrets": ["API_TOKEN"], "timeout_s": 30},
+                "tools": {"command": program, "timeout_s": 30, "startup_timeout_s": 30},
+                "keyed": {"command": program, "secrets": ["API_TOKEN"], "timeout_s": 30, "startup_timeout_s": 30},
             },
         )
     )

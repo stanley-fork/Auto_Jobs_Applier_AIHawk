@@ -7,8 +7,8 @@ import { presetOf, presetPermissions } from "../src/lib/permission-presets";
 import { permissionGroups } from "../src/lib/permission-table";
 import { fullConfig } from "./support/config";
 
-const TIME = { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: ["TIME_TOKEN"], timeout_s: 120 };
-const WEB = { url: "https://web.example/mcp", headers: { "X-Client": "dots" }, secrets: ["Authorization"], timeout_s: 30 };
+const TIME = { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: ["TIME_TOKEN"], timeout_s: 120, startup_timeout_s: 60 };
+const WEB = { url: "https://web.example/mcp", headers: { "X-Client": "dots" }, secrets: ["Authorization"], timeout_s: 30, startup_timeout_s: 90 };
 
 describe("the form of an MCP server", () => {
   it("is the entry it was made from, for a program and for a URL", () => {
@@ -20,7 +20,7 @@ describe("the form of an MCP server", () => {
 
   it("reads one argument, variable, header or secret a line, keeps the spaces inside one, and names a line it cannot read", () => {
     const form = { ...EMPTY_MCP_SERVER_FORM, command: " npx ", args: "-y\n@scope/server --flag\n\n", env: "MODE=a=b\n", secrets: "API_KEY\n" };
-    expect(serverOfForm(form)).toEqual({ ok: true, server: { command: "npx", args: ["-y", "@scope/server --flag"], env: { MODE: "a=b" }, secrets: ["API_KEY"], timeout_s: 120 } });
+    expect(serverOfForm(form)).toEqual({ ok: true, server: { command: "npx", args: ["-y", "@scope/server --flag"], env: { MODE: "a=b" }, secrets: ["API_KEY"], timeout_s: 120, startup_timeout_s: 60 } });
     expect(serverOfForm({ ...form, env: "MODE" })).toEqual({ ok: false, problem: '"MODE" is not NAME=value' });
     expect(serverOfForm({ ...EMPTY_MCP_SERVER_FORM, kind: "url", url: "https://a.example", headers: "no colon" })).toEqual({ ok: false, problem: '"no colon" is not Name: value' });
   });
@@ -52,13 +52,13 @@ describe("an MCP server in the settings", () => {
       ["permissions.mcp.web", "deny", "allow"],
     ]);
     // The same entry with its keys in another order is no change.
-    const reordered = { ...base, mcp_servers: { time: { timeout_s: 120, secrets: ["TIME_TOKEN"], env: {}, args: ["mcp-server-time"], command: "uvx" } } };
+    const reordered = { ...base, mcp_servers: { time: { startup_timeout_s: 60, timeout_s: 120, secrets: ["TIME_TOKEN"], env: {}, args: ["mcp-server-time"], command: "uvx" } } };
     expect(configChanges(base, reordered)).toEqual([]);
   });
 
   it("an edit put on top of a config changed meanwhile keeps the server someone else added and the one this edit added", () => {
     const latest = setMcpServer(base, "web", WEB);
-    const mine = setMcpServer(base, "files", { command: "npx", args: ["-y", "files"], env: {}, secrets: [], timeout_s: 60 });
+    const mine = setMcpServer(base, "files", { command: "npx", args: ["-y", "files"], env: {}, secrets: [], timeout_s: 60, startup_timeout_s: 60 });
     const merged = rebase(base, mine, latest);
     expect(Object.keys(merged.mcp_servers).sort()).toEqual(["files", "time", "web"]);
     // Removing a server in the edit removes it from the newer config too, with its permission.

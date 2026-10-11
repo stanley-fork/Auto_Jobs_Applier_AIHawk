@@ -60,7 +60,8 @@
             "secrets": [
               "TIME_TOKEN"
             ],
-            "timeout_s": 120
+            "timeout_s": 120,
+            "startup_timeout_s": 60
           },
           "search": {
             "url": "https://search.example/mcp",
@@ -70,7 +71,8 @@
             "secrets": [
               "Authorization"
             ],
-            "timeout_s": 30
+            "timeout_s": 30,
+            "startup_timeout_s": 60
           }
         },
         "permissions": {
@@ -87,8 +89,8 @@
           "browser.read": "allow",
           "browser.act": "allow",
           "automations": "ask",
-          "mcp.time": "allow",
-          "mcp.search": "ask"
+          "mcp.search": "ask",
+          "mcp.time": "allow"
         },
         "instructions": "Answer in one line."
       }

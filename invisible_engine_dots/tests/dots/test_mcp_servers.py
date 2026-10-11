@@ -27,7 +27,7 @@ from nanobot.dots.secrets import McpSecrets
 class Servers:
     """A manager on a local computer whose relay is the fake one, logging every start."""
 
-    def __init__(self, tmp_path: Path, startup_timeout_s: float) -> None:
+    def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
         self.relay_log = tmp_path / "relay.jsonl"
         workspace = tmp_path / "home" / "dot" / "workspace"
@@ -37,12 +37,10 @@ class Servers:
         self.program = str(install_fake_tool_server(tmp_path / "bin"))
         self.registry = ToolRegistry()
         self.secrets = McpSecrets()
-        self.manager = McpServers(
-            computer=self.computer, registry=self.registry, secrets=self.secrets, startup_timeout_s=startup_timeout_s
-        )
+        self.manager = McpServers(computer=self.computer, registry=self.registry, secrets=self.secrets)
 
     def stdio(self, **fields: Any) -> McpStdioServer:
-        return McpStdioServer.model_validate({"command": self.program, "timeout_s": 30, **fields})
+        return McpStdioServer.model_validate({"command": self.program, "timeout_s": 30, "startup_timeout_s": 20, **fields})
 
     def starts(self) -> list[dict[str, Any]]:
         if not self.relay_log.exists():
@@ -62,8 +60,8 @@ class Servers:
 async def servers(tmp_path: Path) -> AsyncIterator[Callable[..., Servers]]:
     made: list[Servers] = []
 
-    def make(startup_timeout_s: float = 20.0) -> Servers:
-        made.append(Servers(tmp_path, startup_timeout_s))
+    def make() -> Servers:
+        made.append(Servers(tmp_path))
         return made[-1]
 
     yield make
@@ -127,7 +125,7 @@ async def test_a_program_that_is_not_installed_fails_with_what_it_wrote_and_star
 ) -> None:
     s = servers()
     missing = tmp_path / "bin" / "not-yet"
-    s.manager.configure({"later": McpStdioServer.model_validate({"command": str(missing), "timeout_s": 30})})
+    s.manager.configure({"later": McpStdioServer.model_validate({"command": str(missing), "timeout_s": 30, "startup_timeout_s": 20})})
     await s.manager.ready()
 
     state = s.state("later")
@@ -153,12 +151,24 @@ async def test_what_a_failing_server_wrote_is_its_error_with_its_secrets_masked(
     assert "tok-SECRET-2" not in error
 
 
-async def test_a_server_that_does_not_answer_fails_at_the_startup_timeout(servers: Callable[..., Servers]) -> None:
-    s = servers(startup_timeout_s=1.0)
-    s.manager.configure({"slow": s.stdio(env={"FAKE_TOOLS_HANG": "1"})})
+async def test_a_server_that_does_not_answer_fails_at_its_startup_timeout_and_holds_up_no_turn_after(
+    servers: Callable[..., Servers],
+) -> None:
+    s = servers()
+    s.manager.configure({"slow": s.stdio(env={"FAKE_TOOLS_HANG": "1"}, startup_timeout_s=1)})
     await s.manager.ready()
 
-    assert s.state("slow") == {"name": "slow", "state": "failed", "error": "it did not start within 1 s", "tools": 0}
+    state = s.state("slow")
+    assert (state["state"], state["error"]) == (
+        "failed",
+        "it did not start within its startup_timeout_s, 1 s; it is started again when its settings change",
+    )
+    # The next turn does not wait for it again: it is not started until its entry changes.
+    await s.manager.ready()
+    assert len(s.starts()) == 1
+    s.manager.configure({"slow": s.stdio(env={"FAKE_TOOLS_HANG": "1"}, startup_timeout_s=2)})
+    await s.manager.ready()
+    assert len(s.starts()) == 2
 
 
 async def test_a_change_restarts_only_the_server_it_changes_and_a_removed_one_takes_its_tools(
@@ -248,7 +258,7 @@ async def test_an_http_server_gets_its_secrets_as_headers(servers: Callable[...,
         s.secrets.set({"remote": {"Authorization": "Bearer tok-3"}})
         url = f"http://127.0.0.1:{port}/mcp"
         s.manager.configure(
-            {"remote": McpHttpServer.model_validate({"url": url, "headers": {"X-Client": "dots"}, "secrets": ["Authorization"], "timeout_s": 30})}
+            {"remote": McpHttpServer.model_validate({"url": url, "headers": {"X-Client": "dots"}, "secrets": ["Authorization"], "timeout_s": 30, "startup_timeout_s": 20})}
         )
         await s.manager.ready()
 

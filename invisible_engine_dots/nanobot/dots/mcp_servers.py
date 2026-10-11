@@ -13,8 +13,9 @@ identity: the client spawns the server, initializes it, lists its tools and time
   reached from the engine, its secrets as headers.
 * When. A config or a secret that changes a server's entry restarts that server alone. A server is started when it is
   declared, and one that failed (its program is not installed yet, it exited) is started again when the next turn
-  starts; the turn waits for the servers being started, each at most STARTUP_TIMEOUT_S. A server whose secret is not
-  set is not started: it fails until the person sets it.
+  starts; the turn waits for the servers being started, each at most its `startup_timeout_s`. One that did not start
+  within that, or whose secret is not set, is not started again until its entry or its secrets change: a turn does not
+  wait for it again and again.
 * What the model gets. Each tool of a connected server, under the client's name `mcp_<server>_<tool>`, is offered
   while the server's permission (`mcp.<server>`) is not denied, and the gate decides each call by it. The prompt
   carries each such server's instructions, as an MCP host carries them, or why it is not connected. An image a tool
@@ -43,9 +44,6 @@ from nanobot.dots.permissions import mcp_permission
 from nanobot.dots.protocol import McpServerSpec, McpStdioServer
 from nanobot.dots.secrets import McpSecrets
 
-# How long a server may take to start and answer `initialize` and `tools/list`, in seconds. A first start through
-# uvx or npx downloads the server, which takes longer than Codex's 10 s or Claude Code's 30 s.
-STARTUP_TIMEOUT_S = 60.0
 # The most of a server's instructions the prompt carries, as Claude Code caps them.
 INSTRUCTIONS_MAX_CHARS = 2048
 # The most of what a stdio server wrote to its standard error that a failure quotes, its end.
@@ -184,12 +182,10 @@ class McpServers:
         computer: Computer,
         registry: ToolRegistry,
         secrets: McpSecrets,
-        startup_timeout_s: float = STARTUP_TIMEOUT_S,
     ) -> None:
         self._computer = computer
         self._registry = registry
         self._secrets = secrets
-        self._startup_timeout_s = startup_timeout_s
         self._declared: dict[str, McpServerSpec] = {}
         self._servers: dict[str, _Server] = {}
         # Closes of servers that were removed or replaced, which the shutdown waits for.
@@ -211,7 +207,7 @@ class McpServers:
 
     async def ready(self) -> None:
         """What a turn does before it offers the tools: start again the servers that failed and may succeed now, then
-        wait for every server being started (each start is bounded by the startup timeout)."""
+        wait for every server being started (each start is bounded by its `startup_timeout_s`)."""
         for server in self._servers.values():
             if server.state == "failed" and server.retry:
                 self._start(server)
@@ -338,17 +334,24 @@ class McpServers:
         )
         server.provider = provider
         reason: str | None
+        timed_out = False
         try:
-            failed = await asyncio.wait_for(provider.connect(), self._startup_timeout_s)
+            failed = await asyncio.wait_for(provider.connect(), server.spec.startup_timeout_s)
             reason = (provider.failure(name) or "it did not connect") if failed else None
         except asyncio.TimeoutError:
-            reason = f"it did not start within {round(self._startup_timeout_s)} s"
+            timed_out = True
+            reason = (
+                f"it did not start within its startup_timeout_s, {server.spec.startup_timeout_s} s; it is started again "
+                "when its settings change"
+            )
         if server.removed:
             await provider.aclose()
             return
         if reason is not None:
             await provider.aclose()
             self._fail(server, reason)
+            # Started again at every turn, it would hold up every turn for as long again.
+            server.retry = not timed_out
             return
         server.instructions = provider.instructions(name)
         server.tools = list(server.registry.tool_names)

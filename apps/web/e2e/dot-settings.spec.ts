@@ -75,7 +75,7 @@ test("an MCP server is added in the settings, its secret reaches the Dot's engin
   await form.getByRole("button", { name: "Add" }).click();
   await saveReviewed(page);
   await expect.poll(async () => (await harness.api.getDot(dot.id)).config.mcp_servers).toEqual({
-    search: { url: "https://search.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 120 },
+    search: { url: "https://search.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 120, startup_timeout_s: 60 },
   });
 
   // Saved, the server's secret can be set; the engine gets it, the page keeps nothing of it.

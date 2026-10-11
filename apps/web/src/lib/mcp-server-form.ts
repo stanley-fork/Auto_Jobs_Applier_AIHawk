@@ -3,7 +3,7 @@
  * secret name per line) and the config entry it is (`mcp_servers.<name>`). The schema of the shared package checks the
  * entry once it is in the draft; this only turns lines into the entry's shape and says which line it cannot read.
  */
-import { isMcpStdioServer, MCP_TIMEOUT_BOUNDS, type McpServerConfig } from "@invisible-dots/shared/browser";
+import { isMcpStdioServer, MCP_STARTUP_TIMEOUT_BOUNDS, MCP_TIMEOUT_BOUNDS, type McpServerConfig } from "@invisible-dots/shared/browser";
 
 export type McpServerKind = "command" | "url";
 
@@ -20,6 +20,7 @@ export interface McpServerForm {
   /** One secret name per line: an environment variable of a command, a header of a URL. */
   secrets: string;
   timeoutS: number;
+  startupTimeoutS: number;
 }
 
 export const EMPTY_MCP_SERVER_FORM: McpServerForm = {
@@ -31,6 +32,7 @@ export const EMPTY_MCP_SERVER_FORM: McpServerForm = {
   headers: "",
   secrets: "",
   timeoutS: MCP_TIMEOUT_BOUNDS.default,
+  startupTimeoutS: MCP_STARTUP_TIMEOUT_BOUNDS.default,
 };
 
 function lines(text: string): string[] {
@@ -62,6 +64,7 @@ export function formOfServer(server: McpServerConfig): McpServerForm {
       env: Object.entries(server.env).map(([name, value]) => `${name}=${value}`).join("\n"),
       secrets: server.secrets.join("\n"),
       timeoutS: server.timeout_s,
+      startupTimeoutS: server.startup_timeout_s,
     };
   }
   return {
@@ -71,6 +74,7 @@ export function formOfServer(server: McpServerConfig): McpServerForm {
     headers: Object.entries(server.headers).map(([name, value]) => `${name}: ${value}`).join("\n"),
     secrets: server.secrets.join("\n"),
     timeoutS: server.timeout_s,
+    startupTimeoutS: server.startup_timeout_s,
   };
 }
 
@@ -80,9 +84,9 @@ export function serverOfForm(form: McpServerForm): { ok: true; server: McpServer
   if (form.kind === "command") {
     const env = pairs(form.env, "=");
     if (!env.ok) return { ok: false, problem: `"${env.line}" is not NAME=value` };
-    return { ok: true, server: { command: form.command.trim(), args: lines(form.args), env: env.value, secrets, timeout_s: form.timeoutS } };
+    return { ok: true, server: { command: form.command.trim(), args: lines(form.args), env: env.value, secrets, timeout_s: form.timeoutS, startup_timeout_s: form.startupTimeoutS } };
   }
   const headers = pairs(form.headers, ":");
   if (!headers.ok) return { ok: false, problem: `"${headers.line}" is not Name: value` };
-  return { ok: true, server: { url: form.url.trim(), headers: headers.value, secrets, timeout_s: form.timeoutS } };
+  return { ok: true, server: { url: form.url.trim(), headers: headers.value, secrets, timeout_s: form.timeoutS, startup_timeout_s: form.startupTimeoutS } };
 }

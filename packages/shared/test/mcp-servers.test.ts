@@ -3,6 +3,7 @@ import {
   checkMcpSecret,
   defaultPermission,
   isPermissionName,
+  MCP_STARTUP_TIMEOUT_BOUNDS,
   MCP_TIMEOUT_BOUNDS,
   mcpServerOf,
   parseDotConfig,
@@ -33,8 +34,8 @@ describe("the MCP servers of a Dot's config", () => {
       },
     });
     expect(config.mcp_servers).toEqual({
-      time: { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: [], timeout_s: MCP_TIMEOUT_BOUNDS.default },
-      search: { url: "https://search.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 30 },
+      time: { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: [], timeout_s: MCP_TIMEOUT_BOUNDS.default, startup_timeout_s: MCP_STARTUP_TIMEOUT_BOUNDS.default },
+      search: { url: "https://search.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 30, startup_timeout_s: MCP_STARTUP_TIMEOUT_BOUNDS.default },
     });
     expect(parseDotConfig(MINIMAL).mcp_servers).toEqual({});
   });
@@ -44,6 +45,7 @@ describe("the MCP servers of a Dot's config", () => {
     expect(issuesOf({ ...MINIMAL, mcp_servers: { web: { url: "file:///etc/passwd" } } }).join()).toMatch(/mcp_servers/);
     expect(issuesOf({ ...MINIMAL, mcp_servers: { both: { command: "x", url: "https://a.example" } } }).join()).toMatch(/mcp_servers/);
     expect(issuesOf({ ...MINIMAL, mcp_servers: { slow: { command: "x", timeout_s: MCP_TIMEOUT_BOUNDS.max + 1 } } }).join()).toMatch(/mcp_servers/);
+    expect(issuesOf({ ...MINIMAL, mcp_servers: { slow: { command: "x", startup_timeout_s: 0 } } }).join()).toMatch(/mcp_servers/);
   });
 
   it("refuses a secret named twice, or named as a value the entry also writes", () => {

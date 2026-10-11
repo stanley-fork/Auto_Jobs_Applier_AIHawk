@@ -1116,6 +1116,7 @@ mcp_servers:                           # optional: MCP servers whose tools the D
     env: {LOG_LEVEL: warning}          # optional: environment written here
     secrets: [TIME_API_KEY]            # optional: environment variables whose values are secrets (section 9.6)
     timeout_s: 120                     # optional: the longest one call may take, 1..600
+    startup_timeout_s: 60              # optional: the longest it may take to start, 1..600
   search:
     url: https://search.example/mcp    # streamable HTTP, or SSE for a URL ending in /sse
     headers: {X-Client: dots}          # optional
@@ -1181,7 +1182,8 @@ know, so a server is one decision, as it is in Claude Code's permission rules
 (`mcp__<server>`), and it asks by default. Its risk is `high`, as running
 commands is. A permission of a server the config does not declare is refused,
 and `resolvePermission` denies it. `MCP_SERVER_NAME_PATTERN` and
-`MCP_TIMEOUT_BOUNDS` are in `packages/shared`; the guest's `protocol.py` keeps a
+`MCP_TIMEOUT_BOUNDS` and `MCP_STARTUP_TIMEOUT_BOUNDS` (Codex's `tool_timeout_sec` and
+`startup_timeout_sec`) are in `packages/shared`; the guest's `protocol.py` keeps a
 copy of the name rule. The servers are listed by name everywhere (the status,
 the prompt, the settings): the database keeps a config as `jsonb`, which does
 not keep the order of an object's keys.
@@ -1320,11 +1322,13 @@ the reconnect are the client's. What is the Dot's:
   reached from the engine, its secrets as headers.
 - when. A server is started when it is declared, and again when a config or a
   secret changes its entry (that server only). The next turn waits for the
-  servers being started, each for at most 60 s (`STARTUP_TIMEOUT_S`: a first
-  start through `uvx` or `npx` downloads the server). One that failed (its
-  program is not installed yet, it exited) is started again when the next turn
-  starts, so a server whose program the Dot installs works from the next
-  message. One whose secret is not set is not started until the person sets it.
+  servers being started, each for at most its `startup_timeout_s` (60 s by
+  default: a first start through `uvx` or `npx` downloads the server). One that
+  failed (its program is not installed yet, it exited) is started again when the
+  next turn starts, so a server whose program the Dot installs works from the
+  next message. One that did not start in time, or whose secret is not set, is
+  not started again until its entry or its secrets change, so it never holds up
+  every turn.
 - why it is not connected. The client says why a connection failed, and a
   command's standard error is drained into a pipe of the engine, of which the
   last 2000 characters are kept: the error a person and the model read is what

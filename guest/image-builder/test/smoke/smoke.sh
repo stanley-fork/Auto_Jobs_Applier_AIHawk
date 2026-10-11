@@ -446,7 +446,7 @@ check "GET /tools names the permission each tool exercises" "api $A/tools | jq -
 # relay's environment; one whose program is not installed says why ---
 MCP_SECRET=smoke-mcp-secret-7
 echo '{"computer.exec":"allow","mcp.tools":"allow","mcp.missing":"ask"}' > /tmp/perms.json
-echo '{"tools":{"command":"'"$FAKE_TOOLS"'","env":{"MODE":"smoke"},"secrets":["TOKEN"],"timeout_s":30},"missing":{"command":"/usr/local/bin/not-installed","timeout_s":30}}' > /tmp/mcp.json
+echo '{"tools":{"command":"'"$FAKE_TOOLS"'","env":{"MODE":"smoke"},"secrets":["TOKEN"],"timeout_s":30,"startup_timeout_s":30},"missing":{"command":"/usr/local/bin/not-installed","timeout_s":30,"startup_timeout_s":30}}' > /tmp/mcp.json
 echo '{"tools":{"TOKEN":"'"$MCP_SECRET"'"}}' > /tmp/mcp-secrets.json
 check "the host pushes two MCP servers and a secret of one (204 204)" "[ \"\$(push)\" = '204 204' ]"
 mcp_state() { api $A/tools | jq -r --arg n "$1" '.mcp_servers[]|select(.name==$n)|.state'; }

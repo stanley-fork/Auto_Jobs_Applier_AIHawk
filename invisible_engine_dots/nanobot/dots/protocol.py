@@ -308,6 +308,8 @@ class McpStdioServer(_Open):
     # Names of environment variables whose values are the Dot's secrets (`POST /secrets`), never in the config.
     secrets: list[NonEmptyStr] = Field(default_factory=list)
     timeout_s: PositiveInt
+    # The longest it may take to start and list its tools (MCP_STARTUP_TIMEOUT_BOUNDS in packages/shared).
+    startup_timeout_s: PositiveInt
 
 
 class McpHttpServer(_Open):
@@ -318,6 +320,7 @@ class McpHttpServer(_Open):
     # Names of headers whose values are the Dot's secrets.
     secrets: list[NonEmptyStr] = Field(default_factory=list)
     timeout_s: PositiveInt
+    startup_timeout_s: PositiveInt
 
 
 McpServerSpec = McpStdioServer | McpHttpServer

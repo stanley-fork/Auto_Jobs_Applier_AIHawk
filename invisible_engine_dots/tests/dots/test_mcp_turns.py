@@ -29,7 +29,7 @@ def chat_unit() -> TurnUnit:
 
 def server(tmp_path: Path, **fields: Any) -> dict[str, Any]:
     (tmp_path / "bin").mkdir(exist_ok=True)
-    return {"command": str(install_fake_tool_server(tmp_path / "bin")), "timeout_s": 30, **fields}
+    return {"command": str(install_fake_tool_server(tmp_path / "bin")), "timeout_s": 30, "startup_timeout_s": 20, **fields}
 
 
 class TestNames:
@@ -58,8 +58,8 @@ class TestConfig:
         config = parse_runtime_config(
             runtime_config_body(
                 mcp_servers={
-                    "time": {"command": "uvx", "args": ["mcp-server-time"], "timeout_s": 120},
-                    "web": {"url": "https://example.com/mcp", "secrets": ["Authorization"], "timeout_s": 60},
+                    "time": {"command": "uvx", "args": ["mcp-server-time"], "timeout_s": 120, "startup_timeout_s": 60},
+                    "web": {"url": "https://example.com/mcp", "secrets": ["Authorization"], "timeout_s": 60, "startup_timeout_s": 30},
                 }
             )
         )
@@ -70,9 +70,9 @@ class TestConfig:
     @pytest.mark.parametrize(
         ("overrides", "problem"),
         [
-            ({"mcp_servers": {"Bad_Name": {"command": "x", "timeout_s": 1}}}, "is not an MCP server name"),
+            ({"mcp_servers": {"Bad_Name": {"command": "x", "timeout_s": 1, "startup_timeout_s": 1}}}, "is not an MCP server name"),
             ({"permissions": {"mcp.ghost": "allow"}}, "does not declare"),
-            ({"mcp_servers": {"web": {"url": "ftp://example.com", "timeout_s": 1}}}, "mcp_servers"),
+            ({"mcp_servers": {"web": {"url": "ftp://example.com", "timeout_s": 1, "startup_timeout_s": 1}}}, "mcp_servers"),
         ],
     )
     def test_a_server_the_engine_cannot_act_on_is_refused(self, overrides: dict[str, Any], problem: str) -> None:

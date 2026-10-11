@@ -1,6 +1,6 @@
 "use client";
 
-import { computerIsUp, isMcpServerName, MCP_TIMEOUT_BOUNDS, mcpServerNames, type McpSecretState, type McpServerStatus } from "@invisible-dots/shared/browser";
+import { computerIsUp, isMcpServerName, MCP_STARTUP_TIMEOUT_BOUNDS, MCP_TIMEOUT_BOUNDS, mcpServerNames, type McpSecretState, type McpServerStatus } from "@invisible-dots/shared/browser";
 import { useState, type FormEvent } from "react";
 import { api } from "../../lib/api";
 import { mcpServerSummary, setMcpServer } from "../../lib/config-fields";
@@ -92,6 +92,18 @@ function ServerFields({ id, form, onChange, errorOf }: { id: string; form: McpSe
         onChange={(timeoutS) => set({ timeoutS })}
         error={errorOf("timeout_s")}
       />
+      <NumberField
+        id={`${id}-startup-timeout`}
+        label="Longest start"
+        unit="seconds"
+        min={MCP_STARTUP_TIMEOUT_BOUNDS.min}
+        max={MCP_STARTUP_TIMEOUT_BOUNDS.max}
+        step={1}
+        value={form.startupTimeoutS}
+        onChange={(startupTimeoutS) => set({ startupTimeoutS })}
+        hint="A first start through uvx or npx downloads the server. One that does not start in time is tried again once its settings change."
+        error={errorOf("startup_timeout_s")}
+      />
     </>
   );
 }
@@ -181,7 +193,7 @@ export function McpServersPanel({ draft, saved, change, errorOf, dotId, computer
                   <p className="font-medium">{name}</p>
                   <p className="truncate font-mono text-xs text-muted-foreground">{mcpServerSummary(server)}</p>
                   {savedServer ? <ServerState status={statuses.get(name)} /> : <p className="text-xs text-muted-foreground">Not saved yet.</p>}
-                  {(["command", "url", "args", "env", "headers", "secrets", "timeout_s"] as const).map((field) => {
+                  {(["command", "url", "args", "env", "headers", "secrets", "timeout_s", "startup_timeout_s"] as const).map((field) => {
                     const error = errorOf(`mcp_servers.${name}.${field}`);
                     return error ? <p key={field} className="text-xs text-danger">{error}</p> : null;
                   })}

@@ -187,6 +187,13 @@ export type PermissionDecision = z.infer<typeof permissionDecision>;
  */
 export const MCP_TIMEOUT_BOUNDS = { min: 1, max: 600, default: 120 } as const;
 
+/**
+ * The longest a declared MCP server may take to start and list its tools, in seconds, and its default: Codex's
+ * `startup_timeout_sec`. A first start through uvx or npx downloads the server, so the default is above Codex's 10 s
+ * and Claude Code's 30 s. A server that does not start within it is not started again until its entry changes.
+ */
+export const MCP_STARTUP_TIMEOUT_BOUNDS = { min: 1, max: 600, default: 60 } as const;
+
 // An environment variable's name, as POSIX writes one, and an HTTP header's name (an RFC 9110 token).
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -197,6 +204,13 @@ const mcpTimeout = z
   .min(MCP_TIMEOUT_BOUNDS.min)
   .max(MCP_TIMEOUT_BOUNDS.max)
   .default(MCP_TIMEOUT_BOUNDS.default);
+
+const mcpStartupTimeout = z
+  .number()
+  .int("startup_timeout_s must be a whole number of seconds")
+  .min(MCP_STARTUP_TIMEOUT_BOUNDS.min)
+  .max(MCP_STARTUP_TIMEOUT_BOUNDS.max)
+  .default(MCP_STARTUP_TIMEOUT_BOUNDS.default);
 
 /**
  * An MCP server the engine starts on the Dot's computer, as the user `dot`, and talks to over its standard input and
@@ -210,6 +224,7 @@ const mcpStdioServer = z
     env: z.record(z.string().regex(ENV_NAME, "an environment variable is named by letters, digits and '_'"), z.string()).default({}),
     secrets: z.array(z.string().regex(ENV_NAME, "a secret is named as the environment variable it becomes")).default([]),
     timeout_s: mcpTimeout,
+    startup_timeout_s: mcpStartupTimeout,
   })
   .strict();
 
@@ -226,11 +241,12 @@ const mcpHttpServer = z
     headers: z.record(z.string().regex(HEADER_NAME, "a header is named by an HTTP token"), z.string()).default({}),
     secrets: z.array(z.string().regex(HEADER_NAME, "a secret is named as the header it becomes")).default([]),
     timeout_s: mcpTimeout,
+    startup_timeout_s: mcpStartupTimeout,
   })
   .strict();
 
 const mcpServer = z.union([mcpStdioServer, mcpHttpServer], {
-  error: "an MCP server is either { command, args?, env?, secrets?, timeout_s? } or { url, headers?, secrets?, timeout_s? }",
+  error: "an MCP server is either { command, args?, env?, secrets?, timeout_s?, startup_timeout_s? } or { url, headers?, secrets?, timeout_s?, startup_timeout_s? }",
 });
 export type McpServerConfig = z.output<typeof mcpServer>;
 export type McpStdioServerConfig = z.output<typeof mcpStdioServer>;

@@ -512,7 +512,7 @@ describe("the danger zone", () => {
 });
 
 describe("the MCP servers of a Dot", () => {
-  const WEB = { url: "https://web.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 30 };
+  const WEB = { url: "https://web.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 30, startup_timeout_s: 60 };
   // The panel, not the group of the same name under Permissions and tools.
   const panel = () => within(screen.getByRole("heading", { level: 2, name: "MCP servers" }).closest("section")!);
 
@@ -549,7 +549,7 @@ describe("the MCP servers of a Dot", () => {
     expect(panel().getByText("uvx mcp-server-time")).toBeTruthy();
     expect(panel().getByText("Not saved yet.")).toBeTruthy();
     await saveReviewed();
-    await waitFor(() => expect(saved().mcp_servers).toEqual({ time: { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: [], timeout_s: 120 } }));
+    await waitFor(() => expect(saved().mcp_servers).toEqual({ time: { command: "uvx", args: ["mcp-server-time"], env: {}, secrets: [], timeout_s: 120, startup_timeout_s: 60 } }));
   });
 
   it("refuses a name a server cannot have, and removes a server with its permission", async () => {
