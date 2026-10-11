@@ -3,7 +3,7 @@
  * sends, answered from memory, and `/api/stream` as a live SSE body the test pushes events into. `install()` puts
  * it behind the global `fetch`, which is where the web client's SDK looks.
  */
-import { COMPUTER_STOPPED, CONVERSATION_LIST_LIMIT, TASK_LIST_LIMIT, computerIsUp, MAX_EVENT_PAGE, type ApprovalRecord, type BrowserIdentity, type ChannelKind, type ChannelLinkFrame, type ChannelRecord, type ChannelSettings, type ComputerAnswer, type DoctorCheck, type DotConfig, type DotSummary, type Skill, type StoredEvent, type SystemAnswer, type ToolInfo } from "@invisible-dots/shared/browser";
+import { COMPUTER_STOPPED, CONVERSATION_LIST_LIMIT, TASK_LIST_LIMIT, computerIsUp, MAX_EVENT_PAGE, type ApprovalRecord, type BrowserIdentity, type ChannelKind, type ChannelLinkFrame, type ChannelRecord, type ChannelSettings, type ComputerAnswer, type DoctorCheck, type DotConfig, type DotSummary, type McpServerStatus, type Skill, type StoredEvent, type SystemAnswer, type ToolInfo, mcpServerNames } from "@invisible-dots/shared/browser";
 import type { TaskRecord } from "@invisible-dots/sdk";
 import { vi } from "vitest";
 
@@ -115,6 +115,12 @@ export class FakeControlPlane {
     { name: "exec_session", permission: "computer.exec", offered: true, description: "Use a command session." },
     { name: "read_file", permission: "files.read", offered: true, description: "Read a file." },
   ];
+  /** The MCP servers' states `GET /api/dots/:id/tools` answers with, beside the tools. */
+  mcpServers: McpServerStatus[] = [];
+  /** The MCP secrets that are set, as `<server>/<name>`; never their values, as the host answers. */
+  readonly mcpSecretsSet = new Set<string>();
+  /** Every `PUT` (a value) and `DELETE` (null) of an MCP secret, as the browser sent it. */
+  readonly mcpSecretWrites: Array<{ server: string; name: string; value: string | null }> = [];
   /** The channels `GET /api/dots/:id/channels` lists, by Dot id. */
   channels: Record<string, ChannelRecord[]> = {};
   /** The kinds of channel the server can run, as `GET .../channels` says. */
@@ -577,7 +583,24 @@ export class FakeControlPlane {
         }
       }
       if (rest === "skills") return this.skills === null ? json({ error: "computer_stopped", message: "the computer is STOPPED" }, 409) : json({ skills: this.skills });
-      if (rest === "tools") return this.tools === null ? json({ error: "computer_stopped", message: "the computer is STOPPED" }, 409) : json({ tools: this.tools });
+      if (rest === "tools") return this.tools === null ? json({ error: "computer_stopped", message: "the computer is STOPPED" }, 409) : json({ tools: this.tools, mcp_servers: this.mcpServers });
+      const secretsOf = () => ({
+        dot_id: record.id,
+        secrets: mcpServerNames(record.config).flatMap((server) =>
+          record.config.mcp_servers[server]!.secrets.map((name) => ({ server, name, set: this.mcpSecretsSet.has(`${server}/${name}`) })),
+        ),
+      });
+      if (rest === "mcp-secrets" && method === "GET") return json(secretsOf());
+      const secret = /^mcp-secrets\/([^/]+)\/([^/]+)$/.exec(rest);
+      if (secret && (method === "PUT" || method === "DELETE")) {
+        const [server, name] = [decodeURIComponent(secret[1]!), decodeURIComponent(secret[2]!)];
+        if (!record.config.mcp_servers[server]?.secrets.includes(name)) return json({ error: "not_found", message: `no secret ${server}/${name}` }, 404);
+        const value = method === "PUT" ? (JSON.parse(String(init?.body)) as { value: string }).value : null;
+        this.mcpSecretWrites.push({ server, name, value });
+        if (value === null) this.mcpSecretsSet.delete(`${server}/${name}`);
+        else this.mcpSecretsSet.add(`${server}/${name}`);
+        return json(secretsOf());
+      }
       if (rest === "usage") return json({ dot_id: record.id, since: searchParams.get("since"), spent_usd: searchParams.get("since") ? this.spentUsd : this.spentTotalUsd });
       if (rest === "computer") {
         const state = record.computer_state ?? "STOPPED";

@@ -6,7 +6,20 @@
  * one (`rebase`). A permission is compared by what it resolves to, so an explicit entry that says what the default
  * says is not a change.
  */
-import { PERMISSION_INFO, PERMISSIONS, resolvePermission, type DotConfig, type Permission, type PermissionDecision } from "@invisible-dots/shared/browser";
+import {
+  defaultPermission,
+  isMcpStdioServer,
+  mcpPermission,
+  mcpServerNames,
+  mcpServerOf,
+  PERMISSION_INFO,
+  PERMISSIONS,
+  resolvePermission,
+  type DotConfig,
+  type McpServerConfig,
+  type PermissionDecision,
+  type PermissionName,
+} from "@invisible-dots/shared/browser";
 
 /** What a field holds: a text, a number or a switch. */
 export type ConfigValue = string | number | boolean;
@@ -34,15 +47,33 @@ function shownText(value: ConfigValue): string {
 
 const shownPlain = (value: ConfigValue) => String(value);
 
-/** The default decision of a permission: what it resolves to when the config says nothing about it. */
-export function defaultDecision(permission: Permission): PermissionDecision {
-  return resolvePermission({ permissions: {} }, permission);
+/** The default decision of a permission: what it resolves to when the config says nothing about it (an MCP server's asks). */
+export function defaultDecision(permission: PermissionName): PermissionDecision {
+  return defaultPermission(permission);
 }
 
-/** The config with one permission set. A decision the default already makes is not written, so a config stays as short as what it changes. */
-export function setPermission(config: DotConfig, permission: Permission, decision: PermissionDecision): DotConfig {
+/**
+ * The config with one permission set. A decision the default already makes is not written, so a config stays as short
+ * as what it changes; nor is the permission of an MCP server the config does not declare, which it could not hold.
+ */
+export function setPermission(config: DotConfig, permission: PermissionName, decision: PermissionDecision): DotConfig {
   const { [permission]: _replaced, ...rest } = config.permissions;
-  return { ...config, permissions: decision === defaultDecision(permission) ? rest : { ...rest, [permission]: decision } };
+  const server = mcpServerOf(permission);
+  const holds = server === null || server in config.mcp_servers;
+  return { ...config, permissions: !holds || decision === defaultDecision(permission) ? rest : { ...rest, [permission]: decision } };
+}
+
+/** The config with one MCP server declared as `server`, or no longer declared (null): its permission goes with it. */
+export function setMcpServer(config: DotConfig, name: string, server: McpServerConfig | null): DotConfig {
+  const { [name]: _replaced, ...others } = config.mcp_servers;
+  if (server !== null) return { ...config, mcp_servers: { ...others, [name]: server } };
+  const { [mcpPermission(name)]: _dropped, ...permissions } = config.permissions;
+  return { ...config, mcp_servers: others, permissions };
+}
+
+/** A server as a change shows it: what it runs, or where it is. */
+export function mcpServerSummary(server: McpServerConfig): string {
+  return isMcpStdioServer(server) ? [server.command, ...server.args].join(" ") : server.url;
 }
 
 const SCALARS = {
@@ -106,8 +137,46 @@ const PERMISSION_FIELDS: readonly ConfigField[] = PERMISSIONS.map((permission) =
   show: shownPlain,
 }));
 
-/** Every field, in the order the page lists them: the settings first, then the permissions. */
-const FIELDS: readonly ConfigField[] = [...Object.entries(SCALARS).map(([key, f]): ConfigField => ({ key, ...f })), ...PERMISSION_FIELDS];
+/** A value as JSON with the keys of every object in order, so two configs that say the same compare equal. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : item,
+  );
+}
+
+/** The fields of one MCP server: its entry (compared whole), then its permission. A server absent from a config is "". */
+function mcpServerFields(name: string): ConfigField[] {
+  const permission = mcpPermission(name);
+  return [
+    {
+      key: `mcp_servers.${name}`,
+      label: `MCP server ${name}`,
+      applies: "turn",
+      get: (c) => (name in c.mcp_servers ? canonicalJson(c.mcp_servers[name]) : ""),
+      set: (c, v) => setMcpServer(c, name, v === "" ? null : (JSON.parse(String(v)) as McpServerConfig)),
+      show: (v) => (v === "" ? "(not declared)" : mcpServerSummary(JSON.parse(String(v)) as McpServerConfig)),
+    },
+    {
+      key: `permissions.${permission}`,
+      label: `Permission of MCP server ${name}`,
+      applies: "turn",
+      get: (c) => resolvePermission(c, permission),
+      set: (c, v) => setPermission(c, permission, v as PermissionDecision),
+      show: shownPlain,
+    },
+  ];
+}
+
+/**
+ * Every field of the configs given, in the order the page lists them: the settings, the permissions, then each MCP
+ * server any of them declares, by name.
+ */
+function fieldsOf(...configs: DotConfig[]): ConfigField[] {
+  const servers = [...new Set(configs.flatMap((c) => mcpServerNames(c)))].sort();
+  return [...Object.entries(SCALARS).map(([key, f]): ConfigField => ({ key, ...f })), ...PERMISSION_FIELDS, ...servers.flatMap(mcpServerFields)];
+}
 
 /** The config with one setting set (a permission is set with `setPermission`). */
 export function setField(config: DotConfig, key: FieldKey, value: ConfigValue): DotConfig {
@@ -125,7 +194,7 @@ export interface ConfigChange {
 
 /** What differs between two configs, field by field. Empty when they amount to the same Dot. */
 export function configChanges(before: DotConfig, after: DotConfig): ConfigChange[] {
-  return FIELDS.flatMap((f) => {
+  return fieldsOf(before, after).flatMap((f) => {
     const was = f.get(before);
     const now = f.get(after);
     return was === now ? [] : [{ key: f.key, label: f.label, before: f.show(was), after: f.show(now), applies: f.applies }];
@@ -139,7 +208,7 @@ export function configChanges(before: DotConfig, after: DotConfig): ConfigChange
  * `latest`.
  */
 export function rebase(base: DotConfig, mine: DotConfig, latest: DotConfig): DotConfig {
-  return FIELDS.reduce((merged, f) => {
+  return fieldsOf(base, mine, latest).reduce((merged, f) => {
     const value = f.get(mine);
     return value === f.get(base) ? merged : f.set(merged, value);
   }, latest);

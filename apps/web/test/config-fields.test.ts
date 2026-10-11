@@ -52,6 +52,7 @@ describe("setField", () => {
       computer: { cpu: 4, memory: "8gb", disk: "80gb", idle_timeout: "1h" },
       permissions: {},
       limits: { max_steps_per_task: 90, max_cost_per_task_usd: 2.5 },
+      mcp_servers: {},
     });
   });
 

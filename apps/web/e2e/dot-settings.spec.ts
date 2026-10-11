@@ -37,7 +37,7 @@ test("allow, ask and deny a permission: the host saves one entry, the Dot's engi
   await expect(page.getByText("Saved. The change applies from the Dot's next turn.")).toBeVisible();
   expect((await harness.api.getDot(dot.id)).config.permissions).toEqual({ "computer.exec": "deny" });
   await expect.poll(() => guest.config?.permissions["computer.exec"]).toBe("deny");
-  expect((await harness.api.listTools(dot.id)).find((tool) => tool.name === "exec")?.offered).toBe(false);
+  expect((await harness.api.listTools(dot.id)).tools.find((tool) => tool.name === "exec")?.offered).toBe(false);
   await expect(exec.getByRole("listitem")).toHaveText(["execnot offered"]);
 
   // Ask: the tool is offered again, and the Dot will wait for an answer.

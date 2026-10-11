@@ -4,7 +4,7 @@
  * whether the model is offered each one right now. The tools come from the Dot's own table (`GET /tools`), which
  * the engine owns, so a tool added there shows up here with no change in this file.
  */
-import { PERMISSION_INFO, PERMISSIONS, resolvePermission, type DotConfig, type Permission, type PermissionDecision, type PermissionRisk, type ToolInfo } from "@invisible-dots/shared/browser";
+import { mcpPermission, mcpServerNames, permissionInfo, PERMISSIONS, resolvePermission, type DotConfig, type PermissionDecision, type PermissionName, type PermissionRisk, type ToolInfo } from "@invisible-dots/shared/browser";
 import { defaultDecision } from "./config-fields";
 
 export const DECISIONS: readonly PermissionDecision[] = ["allow", "ask", "deny"];
@@ -25,7 +25,7 @@ export interface ToolState {
 }
 
 export interface PermissionRow {
-  permission: Permission;
+  permission: PermissionName;
   label: string;
   description: string;
   risk: PermissionRisk;
@@ -49,23 +49,27 @@ const GROUP_LABELS: Readonly<Record<string, string>> = {
   files: "Files",
   browser: "Browser",
   automations: "Automations",
+  mcp: "MCP servers",
 };
 
-function groupOf(permission: Permission): string {
+function groupOf(permission: PermissionName): string {
   return permission.split(".")[0]!;
 }
 
-/** The rows of the editor, grouped in the order of `PERMISSIONS`. `saved` is the config as the host has it; `draft` what the page holds. */
+/**
+ * The rows of the editor, grouped in the order of `PERMISSIONS`, then one row per MCP server the draft declares, by name. `saved`
+ * is the config as the host has it; `draft` what the page holds.
+ */
 export function permissionGroups(draft: DotConfig, saved: DotConfig, tools: readonly ToolInfo[] | null): PermissionGroup[] {
   const groups: PermissionGroup[] = [];
-  for (const permission of PERMISSIONS) {
+  for (const permission of [...PERMISSIONS, ...mcpServerNames(draft).map(mcpPermission)]) {
     const id = groupOf(permission);
     let group = groups.find((g) => g.id === id);
     if (!group) {
       group = { id, label: GROUP_LABELS[id] ?? id, rows: [] };
       groups.push(group);
     }
-    const info = PERMISSION_INFO[permission];
+    const info = permissionInfo(permission)!;
     const decision = resolvePermission(draft, permission);
     group.rows.push({
       permission,
