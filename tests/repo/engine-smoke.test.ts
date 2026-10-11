@@ -5,7 +5,7 @@
  * the jobs run the entry and the gate waits for them, and the entry exits
  * non-zero on a failed check and on a skipped one.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -129,10 +129,10 @@ describe("the engine smoke", () => {
     const lib = read(join(smoke, "lib.sh"));
     const fake = "invisible_engine_dots/tests/fakes/fake_mcp_server.py";
     expect(existsSync(join(repo, fake)), fake).toBe(true);
-    // The smoke copies that file, not a second stand-in of its own, and the tool list beside it.
+    // The smoke copies that file, not a second stand-in of its own, and the engine's capture of the server it serves.
     expect(checks).toContain("fakes/fake_mcp_server.py");
-    expect(checks).toContain("fixtures/mcp-tools-*.json");
-    expect(readdirSync(join(repo, "invisible_engine_dots/tests/fixtures")).filter((n) => /^mcp-tools-.*\.json$/.test(n))).toHaveLength(1);
+    expect(checks).toContain("nanobot/dots/invisible_playwright_mcp.json");
+    expect(existsSync(join(repo, "invisible_engine_dots/nanobot/dots/invisible_playwright_mcp.json"))).toBe(true);
     expect(existsSync(join(smoke, "fake_mcp.py"))).toBe(false);
     // It is the program the engine runs for a browser, under the name the engine reads: lib.sh writes the
     // engine's environment, and only a smoke that sets MCP_COMMAND gives the engine a program of its own.

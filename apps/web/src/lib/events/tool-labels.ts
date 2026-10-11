@@ -36,13 +36,15 @@ export const TOOL_LABELS: Readonly<Record<string, ToolLabel>> = {
   browser_navigate: { label: "Opened a page", ask: "open a page", family: "browser" },
   browser_snapshot: { label: "Inspected the page", ask: "inspect the page", family: "browser" },
   browser_read_text: { label: "Read the page", ask: "read the page", family: "browser" },
-  browser_screenshot: { label: "Looked at the page", ask: "look at the page", family: "browser" },
+  browser_read_html: { label: "Read the page", ask: "read the page", family: "browser" },
+  browser_take_screenshot: { label: "Looked at the page", ask: "look at the page", family: "browser" },
+  browser_evaluate: { label: "Read the page with a script", ask: "read the page with a script", family: "browser" },
   browser_click: { label: "Clicked on the page", ask: "click on the page", family: "browser" },
   browser_click_at: { label: "Clicked on the page", ask: "click on the page", family: "browser" },
   browser_type: { label: "Typed on the page", ask: "type on the page", family: "browser" },
   browser_press_key: { label: "Pressed a key", ask: "press a key", family: "browser" },
   browser_select_option: { label: "Chose an option", ask: "choose an option", family: "browser" },
-  browser_scroll: { label: "Scrolled the page", ask: "scroll the page", family: "browser" },
+  browser_upload_files: { label: "Attached files to the page", ask: "attach files to the page", family: "browser" },
 };
 
 /** What a command that was started in a terminal (`exec` with `tty`, which the engine reports on `tool.called`) did: it did not just run. */

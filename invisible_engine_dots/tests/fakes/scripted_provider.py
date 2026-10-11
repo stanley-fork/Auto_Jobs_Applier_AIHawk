@@ -78,8 +78,10 @@ class ScriptedProvider(LLMProvider):
         # The ProviderCallContext of each request, kept apart from `requests`, which tests serialize.
         self.contexts: list[Any] = []
         self.generation = GenerationSettings(max_tokens=max_tokens)
-        # What the stand-in publishes for every model (a test changes it, or names a model's own in `limits`).
-        self.default_limits = ModelLimits(context_tokens=32_000, answer_tokens=max_tokens)
+        # What the stand-in publishes for every model (a test changes it, or names a model's own in `limits`): the
+        # window of the smaller models Dots run on (kimi-k2 publishes 131072). A turn with every permission, the
+        # browser server's tools and instructions included, is about 34000 tokens by the engine's estimate.
+        self.default_limits = ModelLimits(context_tokens=128_000, answer_tokens=max_tokens)
         self.limits: dict[str, ModelLimits] = {}
 
     async def chat_stream(self, *args: Any, **kwargs: Any) -> LLMResponse:

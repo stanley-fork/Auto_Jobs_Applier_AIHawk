@@ -8,8 +8,9 @@ assert on the process's environment, working directory and calls. Like the real 
 `$INVISIBLE_MCP_HOME/control.json`, because the engine hands the process an environment of its own
 and a test cannot add a variable to it.
 
-Its `tools/list` is the real server's (`tests/fixtures/mcp-tools-0.70.2.json`) and the SDK checks every
-call against those input schemas. The server also refuses an argument the real tool does not have,
+Its instructions and `tools/list` are the real server's, as the engine reads them
+(`nanobot/dots/invisible_playwright_mcp.json`, captured in the mode the engine starts it in), and the SDK checks
+every call against those input schemas. The server also refuses an argument the real tool does not have,
 so a parameter renamed in a call fails here and not only inside a Dot.
 
 `install_fake_mcp` writes the executable the manager runs as the MCP command, the way
@@ -26,7 +27,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "mcp-tools-0.70.2.json"
+# Beside the engine's package in the repository, and copied to the same place relative to this file by the smoke.
+INTERFACE = Path(__file__).resolve().parents[2] / "nanobot" / "dots" / "invisible_playwright_mcp.json"
 SCRIPT = Path(__file__).resolve()
 
 # A 1x1 transparent PNG, and a JPEG of one pixel.
@@ -73,8 +75,8 @@ middle of a call; to `slow://...` it answers after 0.3 s. Each call is recorded 
     (mcp_home / "control.json").write_bytes(json.dumps(control).encode("utf-8"))
 
 
-def _tools() -> list[dict[str, Any]]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))["tools"]
+def _interface() -> dict[str, Any]:
+    return json.loads(INTERFACE.read_text(encoding="utf-8"))
 
 
 async def _serve() -> None:
@@ -105,7 +107,8 @@ async def _serve() -> None:
         saved.parent.mkdir(parents=True, exist_ok=True)
         saved.write_bytes(json.dumps({"browsers": {role: who}, "focus": role}).encode("utf-8"))
 
-    tools = {tool["name"]: tool for tool in _tools()}
+    interface = _interface()
+    tools = {tool["name"]: tool for tool in interface["tools"]}
     state: dict[str, Any] = {
         "download_left": int(control.get("download_answers", 0)),
         "lose_browser": bool(control.get("lose_browser_once", False) or control.get("lose_browser_always", False)),
@@ -127,7 +130,8 @@ async def _serve() -> None:
         unknown = sorted(set(args) - set(tools[name]["inputSchema"].get("properties", {})))
         if unknown:
             return text(f"invalid arguments for {name}: it has no argument {', '.join(unknown)}", error=True)
-        role = args.get("browser") or "main"
+        # Started as the engine starts the real one (INVISIBLE_MCP_HOST_MANAGED=1), it serves `main` alone.
+        role = "main"
 
         if name == "browser_open":
             if control.get("fail_open"):
@@ -195,9 +199,11 @@ async def _serve() -> None:
             return text("<form></form>")
         if name == "browser_evaluate":
             return text("null")
+        if name == "browser_upload_files":
+            return text(f"attached {len(args['paths'])} file(s) to {args['selector']}")
         return text(f"unknown tool {name}", error=True)
 
-    server: Server[Any] = Server("fake-stealth")
+    server: Server[Any] = Server("fake-stealth", instructions=interface["instructions"])
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:

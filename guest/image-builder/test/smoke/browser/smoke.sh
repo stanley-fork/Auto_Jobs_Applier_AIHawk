@@ -169,7 +169,7 @@ check "the model reads the page's text: the heading reached the model" "tool_tur
 check "the model asks for the page's elements: the title reached the model" "tool_turn 4 browser_snapshot '{\"identity_id\":\"$ID\"}' && sent_to_model 'Browser smoke'"
 
 # --- a screenshot: a real picture, accepted by the engine, in the next request as an image part ---
-check "the model takes a screenshot of the page" "tool_turn 5 browser_screenshot '{\"identity_id\":\"$ID\"}' && tool_ok browser_screenshot '$ID'"
+check "the model takes a screenshot of the page" "tool_turn 5 browser_take_screenshot '{\"identity_id\":\"$ID\"}' && tool_ok browser_take_screenshot '$ID'"
 last_image /tmp/shot-page.png
 echo "screenshot of the page: $(identify /tmp/shot-page.png 2>&1 | cut -c1-120)"
 check "the screenshot the model was sent is a PNG of a page" "png_is /tmp/shot-page.png && [ \"\$(identify -format '%w' /tmp/shot-page.png)\" -ge 200 ] && [ \"\$(identify -format '%h' /tmp/shot-page.png)\" -ge 200 ]"
@@ -177,7 +177,7 @@ check "it shows the page: most of it is the page's own color, and it is no blank
 check "the stored transcript keeps no picture: the engine's database holds no PNG, only the placeholder" "! grep -a -q iVBORw0KGgo /home/dotengine/state/engine.sqlite* && grep -a -q 'not stored' /home/dotengine/state/engine.sqlite*"
 
 # --- the relay carries a message of megabytes: the screenshot of random noise ---
-check "the model opens a page of random pixels and takes a screenshot of it" "tool_turn 6 browser_navigate '{\"identity_id\":\"$ID\",\"url\":\"$PAGES/noise.html\"}' && tool_turn 7 browser_screenshot '{\"identity_id\":\"$ID\"}'"
+check "the model opens a page of random pixels and takes a screenshot of it" "tool_turn 6 browser_navigate '{\"identity_id\":\"$ID\",\"url\":\"$PAGES/noise.html\"}' && tool_turn 7 browser_take_screenshot '{\"identity_id\":\"$ID\"}'"
 last_image /tmp/shot-noise.png
 echo "screenshot of the noise: $(ls -l /tmp/shot-noise.png | awk '{print $5}') bytes"
 check "that picture crossed the relay whole: a valid PNG of more than 500 kB" "png_is /tmp/shot-noise.png && [ \"\$(stat -c %s /tmp/shot-noise.png)\" -gt 500000 ] && identify /tmp/shot-noise.png >/dev/null 2>&1"

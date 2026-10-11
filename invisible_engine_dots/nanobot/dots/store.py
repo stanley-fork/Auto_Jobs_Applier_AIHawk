@@ -976,14 +976,25 @@ def _approval(row: sqlite3.Row) -> Approval:
 
 
 def canonical_arguments(value: object) -> str:
-    """JSON with object keys sorted at every level: two argument objects are the same call when this is equal.
+    """JSON with object keys sorted at every level and a whole number written one way: two argument objects are
+    the same call when this is equal.
 
     The one owner of what "the same arguments" means: an approval holds its arguments in this form, and
-    the gate compares a call with the approved one by it. It is applied to arguments that went through
-    their tool's schema (cast and validated), where an integer field cannot arrive as 1.0, so 1 and 1.0
-    never have to be told apart (tests/dots/test_permissions.py walks every tool of the table).
+    the gate compares a call with the approved one by it. Python's json tells 1 from 1.0, and a tool whose
+    schema says `number` (the browser server's `browser_click_at`) takes either, so a whole number is written
+    as an integer: 10 and 10.0 are one call, 10.5 stays 10.5.
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(_whole_numbers_as_integers(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _whole_numbers_as_integers(value: object) -> object:
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Mapping):
+        return {key: _whole_numbers_as_integers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_whole_numbers_as_integers(item) for item in value]
+    return value
 
 
 def request_approval(

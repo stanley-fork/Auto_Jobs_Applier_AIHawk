@@ -1009,9 +1009,13 @@ ignores anything else.
   it probes the exit's capabilities and caches the answer in
   `/tmp/exit_capability.json`; and it keeps its GeoIP database current from
   its GitHub release.
-- The model never calls `browser_open` directly and never sees the MCP tools
-  by their own names. It calls invisible_dots tools that take an
-  `identity_id`; the browser manager opens the identity's `main` browser with
+- The model never calls `browser_open`: the browser manager opens and closes
+  each identity's browser, and starts its server with
+  `INVISIBLE_MCP_HOST_MANAGED=1`, under which the server serves its `main`
+  browser alone (no tool takes `browser`) and its instructions are the page
+  rules, without `browser_open` and the `support` browser. The model's page
+  tools are that server's own (section 8.3), each with the `identity_id` that
+  picks the open identity's server. The manager opens the browser with
   no `profile`, `proxy` or `seed` argument, so for a first launch the
   environment above is the only source of those values. A later `browser_open`
   with no argument is a reopen, and the library then takes who the browser is
@@ -1043,7 +1047,8 @@ ignores anything else.
 - The only browser of a Dot is `invisible-playwright-mcp`: no tool of the
   engine browses any other way, and the engine and the image carry no other
   browser, browser library, or web fetch or search tool.
-- Screenshots. `browser_screenshot` and `computer_screenshot` return an image
+- Screenshots. `browser_take_screenshot` (and `browser_click_at`, which answers
+  with the page after the click) and `computer_screenshot` return an image
   the model looks at. The transcript, the outbox and the events never hold its
   bytes: the tool's stored result is its text and `[screenshot, 1280x720, not
   stored]`, and the engine adds the newest three images of a turn to each model
@@ -1220,22 +1225,34 @@ does not know.
 | `browser_identity_delete` | `browser.identity.delete` | closes an identity and deletes it with its profile: `identity_id` |
 | `browser_identity_launch` | `browser.identity.launch` | opens the browser of an identity, closing the least recently used one at `max_open`: `identity_id` |
 | `browser_identity_close` | `browser.identity.close` | closes the browser of an identity, keeping its profile: `identity_id` |
-| `browser_navigate` | `browser.navigate` | loads an `http://` or `https://` URL and no other (`file:`, `about:`, `view-source:`, `data:` and `javascript:` are refused, so the permission to navigate is not a permission to read files): `identity_id, url` |
-| `browser_snapshot` | `browser.read` | lists the interactive elements of the page with selectors and coordinates: `identity_id` |
-| `browser_read_text` | `browser.read` | reads the text of the page or of one element, cut (and marked as cut) at the server's own limit unless `max_chars` raises it: `identity_id, selector?, max_chars?` |
-| `browser_screenshot` | `browser.read` | takes a screenshot of the page and shows it to the model: `identity_id` |
-| `browser_click` | `browser.act` | clicks the element a selector names: `identity_id, selector` |
-| `browser_click_at` | `browser.act` | clicks a point of the viewport: `identity_id, x, y` |
-| `browser_type` | `browser.act` | fills a field, replacing what it held: `identity_id, selector, text` (at most 214 characters: the MCP server types a field key by key, 120 to 280 ms a key, in the background of the call, so a text longer than half the 120 s a call waits at the slowest pace could still be typed while the next call runs; a longer one is refused by the schema before it reaches the server) |
-| `browser_press_key` | `browser.act` | presses a key or a shortcut: `identity_id, key` |
-| `browser_select_option` | `browser.act` | chooses an option of a select element by its visible label or its value, as the server does: `identity_id, selector, value` |
-| `browser_scroll` | `browser.act` | scrolls one screen: `identity_id, direction` (`up` is PageUp, `down` is PageDown) |
+| `browser_navigate` | `browser.navigate` | the server's; the engine refuses a URL that is not `http://` or `https://` before it reaches the server (`file:`, `about:`, `view-source:`, `data:` and `javascript:`), so the permission to navigate is not a permission to read files |
+| `browser_snapshot` | `browser.read` | the server's: the page's interactive elements with their selectors and coordinates |
+| `browser_read_text` | `browser.read` | the server's: the text of the page or of the element a selector names |
+| `browser_read_html` | `browser.read` | the server's: the page's HTML, cleaned |
+| `browser_take_screenshot` | `browser.read` | the server's: a screenshot of the page, shown to the model |
+| `browser_evaluate` | `browser.read` | the server's: reads with a script, and refuses one that acts on the page |
+| `browser_click` | `browser.act` | the server's: clicks the element a selector names |
+| `browser_click_at` | `browser.act` | the server's: clicks a point and answers with the page after it |
+| `browser_type` | `browser.act` | the server's: fills a field key by key, a long text going on in the background |
+| `browser_press_key` | `browser.act` | the server's: presses a key or a shortcut |
+| `browser_select_option` | `browser.act` | the server's: chooses an option by its label or its value |
+| `browser_upload_files` | `browser.act` | the server's: attaches files of the dot user to a file field |
 
-The browser tools are served by the `BrowserManager` and so by
-`invisible-playwright-mcp`, the only browser of a Dot; each takes an
-`identity_id`, and the model never sees the MCP server's own tool names. A
-browser action on an identity that is not open does not launch it, it says so
-(section 6). A screenshot is shown to the model and not stored (section 6).
+The page tools are `invisible-playwright-mcp`'s, the only browser of a Dot,
+offered as an MCP host offers a server's tools: the server's name, description
+and input schema, plus the `identity_id` of the open identity whose server the
+call goes to. The engine reads them, with the server's instructions, from
+`nanobot/dots/invisible_playwright_mcp.json`, which
+`guest/image-builder/builder/capture-mcp-interface.py` writes from the real
+server at the version the lock pins, started as the engine starts it; a test
+holds its version to the lock's. Which of the server's tools the model is
+offered is the permission table's: `browser_open`, `browser_close`,
+`browser_list` and `browser_status` are the manager's (the identity tools), and
+`browser_watch` is the UI's frame. The server's instructions go into the
+system prompt whenever a page tool is offered, as an MCP host carries a
+server's instructions. A browser action on an identity that is not open does
+not launch it, it says so (section 6). An image the server answers with is
+shown to the model and not stored (section 6).
 
 The tool calls of one response run one at a time, in the order the model
 gave them. Only the response's `tool_calls` count: a call written in the
@@ -1638,9 +1655,9 @@ other engine owns the state.
   Every `browser.identity.*` event commits with the row change it describes.
   The model's identity and page tools (`browser_tools.py`) and the routes of
   section 5.3 are the callers; `max_open` and `max_identities` (3 and 20) are
-  set when the manager is made and nothing changes them. A page tool names the one
-  tool of the MCP server it calls (`PAGE_TOOLS`) and the manager adds
-  `browser: "main"` to every call.
+  set when the manager is made and nothing changes them. A page tool is the
+  MCP server's tool of the same name (`SERVER_TOOLS`), called with the
+  arguments the model gave it.
 - Images. A tool's image is shown to the model and kept out of the stored
   transcript (`images.py`): the tool message holds its text and
   `[screenshot, WxH, not stored]`, the images of the turn go to a per-turn

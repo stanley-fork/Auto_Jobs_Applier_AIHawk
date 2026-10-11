@@ -37,7 +37,7 @@ from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, res
 from nanobot.agent.tools.gate_types import ToolGate
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.transcript_metadata import METADATA_KEY
-from nanobot.dots import conversations
+from nanobot.dots import browser_tools, conversations
 from nanobot.dots import store as dots_store
 from nanobot.dots.computer import Computer, ComputerError, Entry, FileTooLargeError
 from nanobot.dots.gate import close_open_calls
@@ -317,6 +317,10 @@ class TurnRunner:
             memory_index=await self._memory_index(),
             now=datetime.now().astimezone(),
             skills=await all_skills(self._computer),
+            # The browser server's instructions, as an MCP host carries them, when the turn offers its tools.
+            browser_instructions=browser_tools.INSTRUCTIONS
+            if any(name in browser_tools.SERVER_TOOLS for name in settings.offered_tools)
+            else "",
         )
 
         async def commit(payload: dict[str, Any]) -> None:

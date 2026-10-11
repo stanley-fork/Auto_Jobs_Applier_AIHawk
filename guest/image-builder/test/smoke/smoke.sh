@@ -78,13 +78,14 @@ check "dotagentd is in no group but its own, and dot is in neither of the two gr
 # --- the stand-in for OpenRouter (the key is lib.sh's) ---
 start_fake_openrouter
 # --- the stand-in for invisible-playwright-mcp ---
-# The engine's own test fake (the one owner of what a stand-in answers) and the tool list it serves, as
-# captured from the pinned server, copied out of the tree under test where dot may reach them. It runs on
+# The engine's own test fake (the one owner of what a stand-in answers) and what it serves, the engine's capture
+# of the pinned server (nanobot/dots/invisible_playwright_mcp.json, where the fake looks for it two directories
+# up), copied out of the tree under test where dot may reach them. It runs on
 # the engine's python, which has the `mcp` package, as dot: the engine starts it through dot-agentd's relay.
 ENGINE_TESTS=$(cd "$HERE/../../../../invisible_engine_dots/tests" && pwd)
 FAKE_MCP_DIR=/usr/local/lib/smoke-fake/mcp
 install -D -m 0644 "$ENGINE_TESTS/fakes/fake_mcp_server.py" "$FAKE_MCP_DIR/fakes/fake_mcp_server.py"
-for tools in "$ENGINE_TESTS"/fixtures/mcp-tools-*.json; do install -D -m 0644 "$tools" "$FAKE_MCP_DIR/fixtures/$(basename "$tools")"; done
+install -D -m 0644 "$ENGINE_TESTS/../nanobot/dots/invisible_playwright_mcp.json" "$(dirname "$FAKE_MCP_DIR")/nanobot/dots/invisible_playwright_mcp.json"
 FAKE_MCP=/usr/local/lib/smoke-fake/invisible-playwright-mcp
 printf '#!/bin/sh\nexec /opt/invisible-dots-engine/bin/python -I -B %s/fakes/fake_mcp_server.py "$@"\n' "$FAKE_MCP_DIR" > "$FAKE_MCP"
 chmod 0755 "$FAKE_MCP"
@@ -413,7 +414,7 @@ check_offered() { # n, label, permissions json, expected tools (sorted JSON)
 BROWSER_GRANTED='"computer.screenshot":"allow","browser.identity.list":"allow","browser.identity.create":"allow","browser.identity.delete":"ask","browser.identity.launch":"allow","browser.identity.close":"allow","browser.navigate":"allow","browser.read":"allow","browser.act":"allow"'
 check_offered 1 "every permission granted (files.write and browser.identity.delete ask)" \
   '{"computer.exec":"allow","files.read":"allow","files.write":"ask","automations":"allow",'"$BROWSER_GRANTED"'}' \
-  '["apply_patch","browser_click","browser_click_at","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_text","browser_screenshot","browser_scroll","browser_select_option","browser_snapshot","browser_type","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
+  '["apply_patch","browser_click","browser_click_at","browser_evaluate","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_html","browser_read_text","browser_select_option","browser_snapshot","browser_take_screenshot","browser_type","browser_upload_files","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
 check_offered 2 "exec denied, files.read allowed, the rest missing from the map (deny)" \
   '{"computer.exec":"deny","files.read":"allow"}' \
   '["find_files","grep","list_dir","read_file"]'
@@ -423,7 +424,7 @@ check_offered 3 "only exec allowed: the command tools and nothing else" \
 check_offered 4 "an empty permission map offers nothing" '{}' '[]'
 check_offered 5 "browser.identity.delete asks and browser.read is allowed: the delete and the reading tools" \
   '{"browser.identity.delete":"ask","browser.read":"allow"}' \
-  '["browser_identity_delete","browser_read_text","browser_screenshot","browser_snapshot"]'
+  '["browser_evaluate","browser_identity_delete","browser_read_html","browser_read_text","browser_snapshot","browser_take_screenshot"]'
 check_offered 6 "delete asks, create is denied, nothing else" \
   '{"browser.identity.delete":"ask","browser.identity.create":"deny"}' \
   '["browser_identity_delete"]'
@@ -524,13 +525,13 @@ check "the model launches the identity" "tool_turn 1 browser_identity_launch '{\
 check "browser.identity.launched names it" "launched $ID1"
 check "the MCP server runs as dot, one process, and none of it runs as dotengine" "[ \"\$(fakes_running)\" = 1 ] && ! pgrep -u dotengine -f fake_mcp_server.py >/dev/null"
 check "its environment has the profile, the display, the session id and its home, no self-repair of the library, no proxy, none of the engine's variables and no key; its working directory is the identity's" "mcp_env_ok $ID1 ''"
-check "browser_open was called with the browser role main, once" "call_seen $ID1 browser_open '.args.browser==\"main\"' && [ \"\$(jq -s '[.[] | select(.kind==\"call\" and .name==\"browser_open\")] | length' $(rec $ID1))\" = 1 ]"
+check "browser_open was called with no argument (the server serves the identity's browser alone), once" "call_seen $ID1 browser_open '.args=={}' && [ \"\$(jq -s '[.[] | select(.kind==\"call\" and .name==\"browser_open\")] | length' $(rec $ID1))\" = 1 ]"
 check "/health counts one identity, one open" "health_is 1 1"
 check "the browser tool call for the open identity is made" "tool_turn 2 browser_navigate '{\"identity_id\":\"$ID1\",\"url\":\"http://example.test/one\"}'"
 check "tool.called browser_navigate: ok, permission browser.navigate, allow, naming the identity and the page" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"browser_navigate\" and .data.ok==true and .data.permission==\"browser.navigate\" and .data.decision==\"allow\" and (.data.target|startswith(\"$ID1: http://example.test/one\"))'"
-check "the MCP server got browser_navigate with browser main and the url" "call_seen $ID1 browser_navigate '.args.browser==\"main\" and .args.url==\"http://example.test/one\"'"
-check "the model takes a screenshot of the page" "tool_turn 3 browser_screenshot '{\"identity_id\":\"$ID1\"}'"
-check "tool.called browser_screenshot: ok, permission browser.read" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"browser_screenshot\" and .data.ok==true and .data.permission==\"browser.read\"'"
+check "the MCP server got browser_navigate with the url and nothing else" "call_seen $ID1 browser_navigate '.args=={\"url\":\"http://example.test/one\"}'"
+check "the model takes a screenshot of the page" "tool_turn 3 browser_take_screenshot '{\"identity_id\":\"$ID1\"}'"
+check "tool.called browser_take_screenshot: ok, permission browser.read" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"browser_take_screenshot\" and .data.ok==true and .data.permission==\"browser.read\"'"
 check "the screenshot reached the model's next request as an image part" "jq -s -e 'any(.[]; [.messages[]? | .content? | arrays | .[] | select(.type==\"image_url\") | .image_url.url] | any(startswith(\"data:image/png;base64,\")))' $FULL >/dev/null"
 
 ID2=$(new_identity second); ID3=$(new_identity third); ID4=$(new_identity lossy)
@@ -612,7 +613,7 @@ status_of() { api -o "${2:-/dev/null}" -w '%{http_code}' "${@:3}" "$1"; } # url,
 closed_total() { grep '^data: ' $STREAM | sed 's/^data: //' | jq -s "[.[] | select(.type==\"browser.identity.closed\" and .data.identity_id==\"$1\")] | length"; } # id
 wait_closed_total() { for _ in $(seq 1 30); do [ "$(closed_total "$1")" = "$2" ] && return 0; sleep 1; done; return 1; } # id, n
 check "GET /browser-identities/:id/frame answers a JPEG of the open identity, 409 not_open for a closed one, 404 for an unknown one" "[ \"\$(status_of $A/browser-identities/$ID5/frame /tmp/frame-5.jpg)\" = 200 ] && [ \"\$(head -c 3 /tmp/frame-5.jpg | od -An -tx1 | tr -d ' \n')\" = ffd8ff ] && [ \"\$(status_of $A/browser-identities/$ID1/frame)\" = 409 ] && [ \"\$(status_of $A/browser-identities/nobody-abc123/frame)\" = 404 ]"
-check "the frame was the server's browser_watch with the browser role main, and it launched nothing" "call_seen $ID5 browser_watch '.args.browser==\"main\"' && wait_fakes 1 && health_is 4 1"
+check "the frame was the server's browser_watch, asked with no argument, and it launched nothing" "call_seen $ID5 browser_watch '.args=={}' && wait_fakes 1 && health_is 4 1"
 CLOSED_BEFORE=$(closed_total $ID5)
 check "POST /browser-identities/:id/close answers 204: the browser is closed, the server ends, closed is emitted once, the profile stays" "[ \"\$(status_of $A/browser-identities/$ID5/close /dev/null -X POST)\" = 204 ] && wait_fakes 0 && wait_closed_total $ID5 $((CLOSED_BEFORE + 1)) && [ -d $BROWSERS/$ID5/profile ] && [ \"\$(api $A/browser-identities/$ID5 | jq -r .status)\" = available ] && health_is 4 0"
 check "closing a closed identity answers 204 and emits nothing; an unknown one is 404" "[ \"\$(status_of $A/browser-identities/$ID5/close /dev/null -X POST)\" = 204 ] && [ \"\$(status_of $A/browser-identities/nobody-abc123/close /dev/null -X POST)\" = 404 ] && [ \"\$(closed_total $ID5)\" = $((CLOSED_BEFORE + 1)) ]"

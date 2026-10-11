@@ -60,9 +60,6 @@ from nanobot.dots.identity_rules import (
 from nanobot.dots.protocol import BROWSER_ENV, BROWSERS_DIR, GUEST_DISPLAY, MCP_HOMES_DIR
 from nanobot.dots.store import BrowserIdentityRow, DotStore
 
-# The MCP server's own browser, the one carrying the identity. The server also has a `support` browser;
-# the manager never uses it, and adds this to every call so a caller cannot choose another.
-MAIN_BROWSER = "main"
 # The name the private registry of one identity knows its one MCP server by.
 SERVER_NAME = "browser"
 
@@ -93,9 +90,9 @@ _BROWSER_GONE = "the MCP server reports its browser gone (Firefox crashed or its
 _DATA_URL = "data:"
 
 CLOSE_TIMEOUT_S = 30.0
-# How long a call of a browser tool waits for its answer. The call is cancelled on the client after that, and the MCP
-# server may go on with it (a long typing), so what a tool lets a call ask for must finish well inside it
-# (`browser_tools.TYPE_TEXT_MAX`).
+# How long a call of a browser tool waits for its answer. The server answers every call within its own bound, the 45
+# s it gives a page to load: a typing longer than that goes on in the background and its answer says so
+# (invisible-playwright-mcp's `Work.typing`), so no call is meant to reach this.
 REQUEST_TIMEOUT_S = 120
 # How long a frame waits for the identity's call in flight before it gives up with `busy`.
 FRAME_WAIT_S = 5.0
@@ -414,7 +411,7 @@ class BrowserManager:
             self._emit_closed(session.identity_id)
 
     async def call_tool(self, identity_id: str, tool: str, arguments: Mapping[str, Any] | None = None) -> Any:
-        """Call a tool of the identity's MCP server, with `browser: "main"` added to its arguments.
+        """Call a tool of the identity's MCP server, which serves the identity's browser alone (`HOST_MANAGED`).
 
         Returns what nanobot's MCP client returns: text, or a list of content blocks when the result has
         an image, and an error as a `ToolResult` with `is_error`. Raises `not_open` for an identity that is
@@ -576,6 +573,10 @@ class BrowserManager:
             # invisible_core reinstalls itself from the package index when its version drifts; the image installed it
             # from a hashed lock, and a drift has to fail loudly instead of bringing in files nobody checked.
             BROWSER_ENV["CORE_AUTOFIX"]: "off",
+            # The engine opens and closes this browser and the model has the page tools only: the server serves
+            # `main` alone (no tool takes `browser`, so a caller cannot choose another) and its instructions are
+            # the page rules, without the browser_open the model cannot call.
+            BROWSER_ENV["HOST_MANAGED"]: "1",
         }
         # An identity has no proxy unless the person gave it one: then no proxy variable is set at all and the
         # browser inherits the egress of the VM, whatever the engine's own environment holds. A proxy carries a
@@ -682,7 +683,7 @@ class BrowserManager:
         wrapper = session.registry.get(self._tool_name(tool))
         if wrapper is None:
             raise ValueError(f"the browser server has no tool {tool}")
-        return await wrapper.execute(**{**arguments, "browser": MAIN_BROWSER})
+        return await wrapper.execute(**arguments)
 
     async def _open_browser(self, session: _Session) -> None:
         """`browser_open` with nothing but the browser role: the environment is the one source of the profile

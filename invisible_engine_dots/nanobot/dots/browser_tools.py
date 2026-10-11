@@ -1,16 +1,19 @@
 """The browser tools of the Dot (architecture section 8.3): the identities, the pages of an open one, and the desktop.
 
-The model sees these names, each taking an `identity_id`, and never the names of the MCP server behind
-them. Two kinds:
+Two kinds:
 
 * The identity tools (`browser_identity_*`) are the BrowserManager's: they list, make, delete, open and close
   identities. Opening is explicit. A page tool on an identity that is not open does not open it, it says
   so, so `browser.identity.launch` alone decides whether a browser starts.
-* The page tools are rows of `PAGE_TOOLS`: each says which tool of `invisible-playwright-mcp` it calls and with
-  what arguments, so the one server of the Dot's browsers is the only thing a page tool can reach. The
-  manager adds `browser: "main"` to every call.
+* The page tools are invisible-playwright-mcp's own, offered as an MCP host offers a server's tools: the
+  server's name, description and input schema, as `invisible_playwright_mcp.json` captured them from the
+  pinned version, plus the `identity_id` that says which open identity's server the call goes to. Which of
+  the server's tools the model is offered is the permission table's (`permissions.py`); the server's
+  instructions go into the system prompt (`INSTRUCTIONS`). The server serves the identity's browser alone
+  (`BROWSER_ENV["HOST_MANAGED"]`), so its tools take no `browser`.
 
-A screenshot is shown to the model and not stored (images.py): the tool's result is its text and a placeholder.
+An image the server answers with is shown to the model and not stored (images.py): the tool's result is its
+text and a placeholder.
 """
 
 from __future__ import annotations
@@ -20,16 +23,16 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool, ToolResult
+from nanobot.agent.tools.mcp import _normalize_schema_for_openai
 from nanobot.dots.browser import (
-    REQUEST_TIMEOUT_S,
     BrowserIdentity,
     BrowserIdentityError,
     BrowserManager,
     result_is_error,
-    result_text,
     split_result,
 )
 from nanobot.dots.computer import Computer, ComputerError
@@ -37,49 +40,50 @@ from nanobot.dots.identity_rules import IDENTITY_ID_MAX
 from nanobot.dots.images import ToolImage, current_turn_images, placeholder
 from nanobot.dots.store import iso_from_ms
 
+# What invisible-playwright-mcp tells a model, at the version the image installs: written from the real server by
+# guest/image-builder/builder/capture-mcp-interface.py, and a test holds its version to the lock's.
+SERVER_INTERFACE: Mapping[str, Any] = json.loads(Path(__file__).with_name("invisible_playwright_mcp.json").read_bytes())
+# The server's instructions, which the system prompt carries as an MCP host carries them (context.py).
+INSTRUCTIONS: str = SERVER_INTERFACE["instructions"]
+
 _IDENTITY_ID = {
     "type": "string",
     "minLength": 1,
     "maxLength": IDENTITY_ID_MAX,
     "description": "The id of a browser identity, as browser_identity_list shows it.",
 }
-_OPEN_FIRST = " The identity must be open (browser_identity_launch)."
+def _string(description: str, **more: Any) -> dict[str, Any]:
+    return {"type": "string", "minLength": 1, "description": description, **more}
 
-# The MCP server fills a field by typing it, key by key, at the pace of the library's typing persona: 120 to 280 ms a
-# key (invisible-playwright, `_behaviour.py`). A call that outlives REQUEST_TIMEOUT_S is cancelled by the client while
-# the server goes on typing, the identity's lock is released, and the next call runs against a page that is still
-# being typed into. So a text may be as long as half of that time allows at the slowest pace, which leaves the other
-# half to the page, the pauses and the rest of the call. (The pin of the MCP is decisions.md's; a library that does
-# not type in the background would lift this.)
-TYPING_SECONDS_PER_KEY_MAX = 0.28
-TYPE_TEXT_MAX = int(REQUEST_TIMEOUT_S / 2 / TYPING_SECONDS_PER_KEY_MAX)
+
+# Said once, on the argument every page tool takes, rather than in each description.
+_OPEN_IDENTITY_ID = {
+    **_IDENTITY_ID,
+    "description": "The id of an open browser identity, as browser_identity_list shows it; "
+    "browser_identity_launch opens one.",
+}
 
 
 @dataclass(frozen=True)
-class PageTool:
-    """A page tool of the Dot: the MCP tool it calls and how it turns its own arguments into that tool's.
-
-    name: the model's tool name.
-    mcp_tool: the tool of invisible-playwright-mcp it calls.
-    properties: its arguments besides `identity_id`, as a JSON schema's properties.
-    required: those among them the model must give.
-    arguments: the MCP tool's arguments (without `browser`) from the model's.
-    shows_image: whether the image the MCP tool answers with is shown to the model; any other image is dropped.
-    confirmation: what the tool says when the MCP tool said nothing.
-    refusal: the reason the model's arguments must not be sent to the MCP tool, or None when they may; the tool
-        then answers an error and the server is not called.
-    """
+class ServerTool:
+    """One tool of invisible-playwright-mcp as the server serves it: name, description, input schema, read-only."""
 
     name: str
     description: str
-    mcp_tool: str
-    properties: Mapping[str, Mapping[str, Any]]
-    required: tuple[str, ...]
-    arguments: Callable[[Mapping[str, Any]], dict[str, Any]]
-    shows_image: bool = False
-    confirmation: Callable[[Mapping[str, Any]], str] | None = None
-    read_only: bool = False
-    refusal: Callable[[Mapping[str, Any]], str | None] | None = None
+    input_schema: Mapping[str, Any]
+    read_only: bool
+
+
+# The server's tools by name, as captured.
+SERVER_TOOLS: Mapping[str, ServerTool] = {
+    tool["name"]: ServerTool(
+        tool["name"],
+        tool.get("description") or tool["name"],
+        tool.get("inputSchema") or {"type": "object", "properties": {}},
+        bool((tool.get("annotations") or {}).get("readOnlyHint")),
+    )
+    for tool in SERVER_INTERFACE["tools"]
+}
 
 
 # What browser_navigate may open. The server passes the URL to the page unchecked, so file:///home/dot/... would
@@ -97,151 +101,8 @@ def _only_web_urls(params: Mapping[str, Any]) -> str | None:
     return "browser_navigate opens only http:// and https:// URLs"
 
 
-def _none(params: Mapping[str, Any]) -> dict[str, Any]:
-    return {}
-
-
-def _taken(*names: str) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
-    """The named arguments the model gave, as they are; one it left out or gave as null is left out."""
-    return lambda params: {name: params[name] for name in names if params.get(name) is not None}
-
-
-def _scroll(params: Mapping[str, Any]) -> dict[str, Any]:
-    return {"key": "PageUp" if params.get("direction") == "up" else "PageDown"}
-
-
-def _string(description: str, **more: Any) -> dict[str, Any]:
-    return {"type": "string", "minLength": 1, "description": description, **more}
-
-
-_SELECTOR = _string("A CSS selector or Playwright selector of the element, as browser_snapshot shows it.")
-
-# A Playwright key name, or a key with modifiers: Enter, Tab, Escape, ArrowDown, PageDown, F5, Control+a.
-PAGE_TOOLS: Mapping[str, PageTool] = {
-    tool.name: tool
-    for tool in (
-        PageTool(
-            "browser_navigate",
-            "Load a URL in the browser of an identity and wait for the page to start loading." + _OPEN_FIRST,
-            "browser_navigate",
-            {"url": _string("The full http or https URL, with its scheme (https://...).", maxLength=4096)},
-            ("url",),
-            _taken("url"),
-            refusal=_only_web_urls,
-        ),
-        PageTool(
-            "browser_snapshot",
-            "List the interactive elements of the page of an identity (links, buttons, fields) with their selectors "
-            "and the coordinates of each, and the page's title and URL." + _OPEN_FIRST,
-            "browser_snapshot",
-            {},
-            (),
-            _none,
-            read_only=True,
-        ),
-        PageTool(
-            "browser_read_text",
-            "Read the text of the page of an identity, or of the element a selector names. Long text is cut and the "
-            "cut is marked: raise max_chars, or narrow the selector." + _OPEN_FIRST,
-            "browser_read_text",
-            {
-                # The server reads with document.querySelector, so only CSS: a selector of browser_snapshot in
-                # Playwright's own syntax (:nth-match(...), text=...) fails there.
-                "selector": {
-                    **_SELECTOR,
-                    "type": ["string", "null"],
-                    "description": "A CSS selector: read only this element; the whole page when left out.",
-                },
-                "max_chars": {
-                    "type": ["integer", "null"],
-                    "minimum": 1,
-                    "description": "The most characters to return; the server's own limit when left out.",
-                },
-            },
-            (),
-            _taken("selector", "max_chars"),
-            read_only=True,
-        ),
-        PageTool(
-            "browser_screenshot",
-            "Take a screenshot of the page of an identity and look at it. Use it when the text of the page does not "
-            "tell enough (layout, images, a captcha)." + _OPEN_FIRST,
-            "browser_take_screenshot",
-            {},
-            (),
-            _none,
-            shows_image=True,
-            read_only=True,
-        ),
-        PageTool(
-            "browser_click",
-            "Click the element a selector names, in the page of an identity." + _OPEN_FIRST,
-            "browser_click",
-            {"selector": _SELECTOR},
-            ("selector",),
-            _taken("selector"),
-        ),
-        PageTool(
-            "browser_click_at",
-            "Click the point x, y of the page of an identity, in viewport pixels. Use it for what a selector cannot "
-            "reach. It does not return a screenshot: call browser_screenshot to see the result." + _OPEN_FIRST,
-            "browser_click_at",
-            {
-                "x": {"type": "integer", "minimum": 0, "description": "Pixels from the left edge of the viewport."},
-                "y": {"type": "integer", "minimum": 0, "description": "Pixels from the top edge of the viewport."},
-            },
-            ("x", "y"),
-            _taken("x", "y"),
-            confirmation=lambda params: f"clicked at {params['x']},{params['y']}",
-        ),
-        PageTool(
-            "browser_type",
-            "Fill the field a selector names with a text, replacing what it held." + _OPEN_FIRST,
-            "browser_type",
-            {
-                "selector": _SELECTOR,
-                "text": {
-                    "type": "string",
-                    "maxLength": TYPE_TEXT_MAX,
-                    "description": f"The text to put in the field, at most {TYPE_TEXT_MAX} characters: it is typed key by key, as a person types, which takes time.",
-                },
-            },
-            ("selector", "text"),
-            _taken("selector", "text"),
-        ),
-        PageTool(
-            "browser_press_key",
-            "Press a key in the page of an identity: Enter, Tab, Escape, ArrowDown, F5, or a key with modifiers "
-            "such as Control+a." + _OPEN_FIRST,
-            "browser_press_key",
-            {"key": _string("A Playwright key name.", maxLength=40)},
-            ("key",),
-            _taken("key"),
-        ),
-        PageTool(
-            "browser_select_option",
-            "Choose an option of a select element, by its visible label or by its value." + _OPEN_FIRST,
-            "browser_select_option",
-            {"selector": _SELECTOR, "value": _string("The visible label of the option, or its value.")},
-            ("selector", "value"),
-            _taken("selector", "value"),
-        ),
-        PageTool(
-            "browser_scroll",
-            "Scroll the page of an identity by one screen." + _OPEN_FIRST,
-            "browser_press_key",
-            {"direction": {"type": "string", "enum": ["up", "down"], "description": "up is PageUp, down is PageDown."}},
-            ("direction",),
-            _scroll,
-            confirmation=lambda params: f"scrolled {params['direction']}",
-        ),
-        # No back, forward or reload: they were Alt+Left, Alt+Right and F5 through browser_press_key, and a key the
-        # server presses reaches the page, never the browser's own shortcuts. Alt+Left is not even a key name of the
-        # library ("unknown key: 'Left'": three calls of three failed), and F5 answered that it reloaded a page it
-        # did not reload (measured on the library: the page's state survived it). browser_navigate does both: to
-        # the address a page came from, and to its own address, which loads it again.
-    )
-}
+# What the Dot refuses before a call reaches the server: the reason, or None when the arguments may go.
+REFUSALS: Mapping[str, Callable[[Mapping[str, Any]], str | None]] = {"browser_navigate": _only_web_urls}
 
 
 def _error(error: BrowserIdentityError) -> ToolResult:
@@ -407,57 +268,56 @@ class BrowserIdentityCloseTool(_IdentityActionTool):
 
 
 class BrowserPageTool(_BrowserTool):
-    """One of `PAGE_TOOLS`: a call of invisible-playwright-mcp on an open identity."""
+    """A tool of invisible-playwright-mcp, called on the open identity the model names."""
 
-    def __init__(self, browser: BrowserManager, spec: PageTool) -> None:
+    def __init__(self, browser: BrowserManager, tool: ServerTool) -> None:
         super().__init__(browser)
-        self._spec = spec
+        self._tool = tool
+        # The server's schema as nanobot's MCP client offers any server's (`mcp.MCPToolWrapper`), with the identity
+        # in front of the server's own arguments.
+        schema = _normalize_schema_for_openai(dict(tool.input_schema))
+        self._parameters = {
+            **schema,
+            "properties": {"identity_id": dict(_OPEN_IDENTITY_ID), **(schema.get("properties") or {})},
+            "required": ["identity_id", *(schema.get("required") or [])],
+        }
 
     @property
     def name(self) -> str:
-        return self._spec.name
+        return self._tool.name
 
     @property
     def description(self) -> str:
-        return self._spec.description
+        return self._tool.description
 
     @property
     def read_only(self) -> bool:
-        return self._spec.read_only
+        return self._tool.read_only
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {"identity_id": dict(_IDENTITY_ID), **{key: dict(value) for key, value in self._spec.properties.items()}},
-            "required": ["identity_id", *self._spec.required],
-            "additionalProperties": False,
-        }
+        return self._parameters
 
-    async def execute(self, **params: Any) -> Any:
-        spec = self._spec
-        identity_id = str(params.get("identity_id", ""))
-        if spec.refusal is not None and (reason := spec.refusal(params)) is not None:
+    async def execute(self, identity_id: str = "", **arguments: Any) -> Any:
+        refusal = REFUSALS.get(self._tool.name)
+        if refusal is not None and (reason := refusal(arguments)) is not None:
             return ToolResult.error(reason)
         try:
-            result = await self.browser.call_tool(identity_id, spec.mcp_tool, spec.arguments(params))
+            result = await self.browser.call_tool(str(identity_id), self._tool.name, arguments)
         except BrowserIdentityError as error:
             return _error(error)
         if result_is_error(result):
             return result
         text, images = split_result(result)
-        if not text and spec.confirmation is not None:
-            text = spec.confirmation(params)
         lines = [text] if text else []
         for mime, data in images:
-            if spec.shows_image:
-                turn_images = current_turn_images()
-                if turn_images is None:
-                    return ToolResult.error("a screenshot can only be taken inside a model turn")
-                turn_images.add(ToolImage(f"{spec.name} of identity {identity_id}", mime, data))
-                lines.append(placeholder(data))
-            else:
-                lines.append(placeholder(data, note="call browser_screenshot to see the page"))
+            # Shown, as an MCP host shows a server's images: the server answers with one where it is the result
+            # (a screenshot, the page after a click at a point).
+            turn_images = current_turn_images()
+            if turn_images is None:
+                return ToolResult.error("an image can only be shown inside a model turn")
+            turn_images.add(ToolImage(f"{self._tool.name} of identity {identity_id}", mime, data))
+            lines.append(placeholder(data))
         return "\n".join(lines)
 
 

@@ -166,8 +166,8 @@ describe("the vendored nanobot fork", () => {
     const browserEnv = /^BROWSER_ENV = \{([^}]*)\}/m.exec(protocol);
     expect(browserEnv, "BROWSER_ENV").not.toBeNull();
     const engineEnv = Object.fromEntries([...browserEnv![1]!.matchAll(/"(\w+)":\s*"([^"]+)"/g)].map((m) => [m[1]!, m[2]!]));
-    const { MCP_HOME, MCP_SESSION_ID, PROFILE_DIR, HEADLESS, PROXY, DISPLAY, CORE_AUTOFIX } = ENV;
-    expect(engineEnv).toEqual({ MCP_HOME, MCP_SESSION_ID, PROFILE_DIR, HEADLESS, PROXY, DISPLAY, CORE_AUTOFIX });
+    const { MCP_HOME, MCP_SESSION_ID, PROFILE_DIR, HEADLESS, PROXY, DISPLAY, CORE_AUTOFIX, HOST_MANAGED } = ENV;
+    expect(engineEnv).toEqual({ MCP_HOME, MCP_SESSION_ID, PROFILE_DIR, HEADLESS, PROXY, DISPLAY, CORE_AUTOFIX, HOST_MANAGED });
   });
 
   it("refuses an OpenRouter key by the one rule packages/shared names: the engine's text and pattern are its copy", () => {
