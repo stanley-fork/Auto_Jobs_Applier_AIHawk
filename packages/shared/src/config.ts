@@ -9,7 +9,15 @@
  */
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { isPermission, PERMISSIONS, type Permission } from "./tools.js";
+import {
+  isPermission,
+  isMcpServerName,
+  mcpPermission,
+  mcpServerOf,
+  PERMISSIONS,
+  type Permission,
+  type PermissionName,
+} from "./tools.js";
 
 const KIB = 1024;
 const MIB = KIB * 1024;
@@ -172,6 +180,71 @@ export function isModelRole(name: string): name is ModelRole {
 const permissionDecision = z.enum(["allow", "ask", "deny"]);
 export type PermissionDecision = z.infer<typeof permissionDecision>;
 
+/**
+ * The longest a call to a tool of a declared MCP server may take, in seconds, and its default: what Codex
+ * (`tool_timeout_sec`), Hermes (`timeout`) and OpenClaw (`requestTimeoutMs`) let a server's entry set. 120 is the
+ * engine's own for the browser server's calls.
+ */
+export const MCP_TIMEOUT_BOUNDS = { min: 1, max: 600, default: 120 } as const;
+
+// An environment variable's name, as POSIX writes one, and an HTTP header's name (an RFC 9110 token).
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+const mcpTimeout = z
+  .number()
+  .int("timeout_s must be a whole number of seconds")
+  .min(MCP_TIMEOUT_BOUNDS.min)
+  .max(MCP_TIMEOUT_BOUNDS.max)
+  .default(MCP_TIMEOUT_BOUNDS.default);
+
+/**
+ * An MCP server the engine starts on the Dot's computer, as the user `dot`, and talks to over its standard input and
+ * output: Claude Code's, Codex's and nanobot's stdio entry. `secrets` names environment variables whose values are
+ * the Dot's secrets (set apart from the config, section 9.6), never written in it.
+ */
+const mcpStdioServer = z
+  .object({
+    command: z.string().min(1, "command must not be empty"),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string().regex(ENV_NAME, "an environment variable is named by letters, digits and '_'"), z.string()).default({}),
+    secrets: z.array(z.string().regex(ENV_NAME, "a secret is named as the environment variable it becomes")).default([]),
+    timeout_s: mcpTimeout,
+  })
+  .strict();
+
+/**
+ * An MCP server the engine reaches over streamable HTTP (or SSE, for a URL ending in /sse, as nanobot detects it).
+ * `secrets` names headers whose values are the Dot's secrets, such as `Authorization`.
+ */
+const mcpHttpServer = z
+  .object({
+    url: z
+      .string()
+      .url("url must be an http or https URL")
+      .refine((url) => /^https?:\/\//i.test(url), "url must be an http or https URL"),
+    headers: z.record(z.string().regex(HEADER_NAME, "a header is named by an HTTP token"), z.string()).default({}),
+    secrets: z.array(z.string().regex(HEADER_NAME, "a secret is named as the header it becomes")).default([]),
+    timeout_s: mcpTimeout,
+  })
+  .strict();
+
+const mcpServer = z.union([mcpStdioServer, mcpHttpServer], {
+  error: "an MCP server is either { command, args?, env?, secrets?, timeout_s? } or { url, headers?, secrets?, timeout_s? }",
+});
+export type McpServerConfig = z.output<typeof mcpServer>;
+export type McpStdioServerConfig = z.output<typeof mcpStdioServer>;
+export type McpHttpServerConfig = z.output<typeof mcpHttpServer>;
+
+export function isMcpStdioServer(server: McpServerConfig): server is McpStdioServerConfig {
+  return "command" in server;
+}
+
+/** The names a server's secrets become: environment variables of a stdio server, headers of an HTTP one. */
+function mcpLiteralNames(server: McpServerConfig): string[] {
+  return Object.keys(isMcpStdioServer(server) ? server.env : server.headers);
+}
+
 export const dotConfigSchema = z
   .object({
     name: z
@@ -217,18 +290,10 @@ export const dotConfigSchema = z
         disk: CONFIG_BOUNDS.disk.default,
         idle_timeout: CONFIG_BOUNDS.idleTimeout.default,
       }),
-    permissions: z
-      .record(z.string(), permissionDecision)
-      .default({})
-      .superRefine((perms, ctx) => {
-        // A typo such as "computer.exe: deny" would otherwise be silently ignored
-        // and leave the real permission at its default.
-        for (const key of Object.keys(perms)) {
-          if (!isPermission(key)) {
-            ctx.addIssue({ code: "custom", path: [key], message: `unknown permission "${key}"` });
-          }
-        }
-      }),
+    permissions: z.record(z.string(), permissionDecision).default({}),
+    // The MCP servers whose tools the Dot may use, by name (section 7): the person declares them, as Claude Code,
+    // Codex and nanobot have their user declare them; the Dot can install a server's program, not add a server.
+    mcp_servers: z.record(z.string(), mcpServer).default({}),
     limits: z
       .object({
         max_steps_per_task: z.number().int().min(CONFIG_BOUNDS.maxStepsPerTask.min).max(CONFIG_BOUNDS.maxStepsPerTask.max).default(CONFIG_BOUNDS.maxStepsPerTask.default),
@@ -245,7 +310,36 @@ export const dotConfigSchema = z
         max_cost_per_task_usd: CONFIG_BOUNDS.maxCostPerTaskUsd.default,
       }),
   })
-  .strict();
+  .strict()
+  .superRefine((config, ctx) => {
+    // A typo such as "computer.exe: deny" would otherwise be silently ignored and leave the real permission at its
+    // default, and the permission of a server the config does not declare would hold for nothing.
+    for (const key of Object.keys(config.permissions)) {
+      const server = mcpServerOf(key);
+      if (isPermission(key) || (server !== null && server in config.mcp_servers)) continue;
+      const message = server !== null ? `"${key}" is the permission of an MCP server this config does not declare in mcp_servers` : `unknown permission "${key}"`;
+      ctx.addIssue({ code: "custom", path: ["permissions", key], message });
+    }
+    for (const [name, server] of Object.entries(config.mcp_servers)) {
+      // Checked here and not as the record's key, whose failure zod words as "Invalid key in record".
+      if (!isMcpServerName(name)) {
+        ctx.addIssue({ code: "custom", path: ["mcp_servers", name], message: `"${name}" is not an MCP server's name: 1 to 32 lowercase letters, digits and '-', starting with a letter or a digit` });
+      }
+      const literal = new Set(mcpLiteralNames(server).map((n) => n.toLowerCase()));
+      const seen = new Set<string>();
+      for (const secret of server.secrets) {
+        const key = secret.toLowerCase();
+        if (seen.has(key)) {
+          ctx.addIssue({ code: "custom", path: ["mcp_servers", name, "secrets"], message: `secret "${secret}" is named twice` });
+        }
+        if (literal.has(key)) {
+          const where = isMcpStdioServer(server) ? "env" : "headers";
+          ctx.addIssue({ code: "custom", path: ["mcp_servers", name, "secrets"], message: `"${secret}" is both a secret and a value written in ${where}` });
+        }
+        seen.add(key);
+      }
+    }
+  });
 
 export type DotConfig = z.output<typeof dotConfigSchema>;
 export type DotConfigInput = z.input<typeof dotConfigSchema>;
@@ -319,8 +413,21 @@ export function parseRuntimeConfig(input: unknown): DotRuntimeConfig {
  */
 export function toRuntimeConfig(config: DotConfig): DotRuntimeConfig {
   const { computer: _computer, ...runtime } = config;
-  const permissions = Object.fromEntries(PERMISSIONS.map((permission) => [permission, resolvePermission(config, permission)]));
+  const permissions = Object.fromEntries(permissionNames(config).map((permission) => [permission, resolvePermission(config, permission)]));
   return { ...runtime, permissions };
+}
+
+/**
+ * The MCP servers a config declares, by name. Every list of them is in this order: the host keeps a config as jsonb,
+ * which does not keep the order of an object's keys.
+ */
+export function mcpServerNames(config: Pick<DotRuntimeConfig, "mcp_servers">): string[] {
+  return Object.keys(config.mcp_servers ?? {}).sort();
+}
+
+/** Every permission a config has: those of `PERMISSIONS`, then one for each MCP server it declares, by name. */
+export function permissionNames(config: Pick<DotRuntimeConfig, "mcp_servers">): PermissionName[] {
+  return [...PERMISSIONS, ...mcpServerNames(config).map(mcpPermission)];
 }
 
 export interface ComputerResources {
@@ -345,26 +452,30 @@ export function computerResources(config: Pick<DotConfig, "computer">): Computer
 
 /**
  * The decision for one permission (section 7). An explicit entry in the
- * config wins. Otherwise everything under computer.*, files.*, browser.* and
- * browser.* is allowed, except browser.identity.delete, which asks; the
- * automations permission asks too, because an automation keeps working after
- * the turn. A permission the registry does not know is denied whatever the
- * config says.
+ * config wins. Otherwise everything under computer.*, files.* and browser.*
+ * is allowed, except browser.identity.delete, which asks; the automations
+ * permission asks too, because an automation keeps working after the turn,
+ * and so does the permission of a declared MCP server, whose tools do what
+ * that server decides (Claude Code asks before an MCP tool by default too).
+ * A permission the registry does not know, or of a server the config does
+ * not declare, is denied whatever the config says.
  */
 export function resolvePermission(
-  config: Pick<DotRuntimeConfig, "permissions">,
+  config: Pick<DotRuntimeConfig, "permissions"> & { mcp_servers?: DotRuntimeConfig["mcp_servers"] },
   permission: string,
 ): PermissionDecision {
-  if (!isPermission(permission)) return "deny";
-  const explicit = config.permissions[permission];
-  if (explicit !== undefined) return explicit;
-  return defaultPermission(permission);
+  const server = mcpServerOf(permission);
+  if (server !== null && !(server in (config.mcp_servers ?? {}))) return "deny";
+  if (server === null && !isPermission(permission)) return "deny";
+  return config.permissions[permission] ?? defaultPermission(permission as PermissionName);
 }
 
 const ASK_BY_DEFAULT: ReadonlySet<Permission> = new Set<Permission>(["browser.identity.delete", "automations"]);
 const ALLOWED_NAMESPACES: ReadonlySet<string> = new Set(["computer", "files", "browser"]);
 
-function defaultPermission(permission: Permission): PermissionDecision {
+/** What a permission is when the config says nothing of it: the decision `resolvePermission` falls back to. */
+export function defaultPermission(permission: PermissionName): PermissionDecision {
+  if (!isPermission(permission)) return "ask";
   if (ASK_BY_DEFAULT.has(permission)) return "ask";
   return ALLOWED_NAMESPACES.has(permission.split(".")[0] ?? "") ? "allow" : "deny";
 }

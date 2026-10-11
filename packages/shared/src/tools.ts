@@ -105,3 +105,52 @@ export const PERMISSION_INFO: Record<Permission, PermissionInfo> = {
     risk: "medium",
   },
 };
+
+/**
+ * An MCP server the person declares in a Dot's config (`mcp_servers`, section 7) is named by this rule. The name is
+ * the prefix of the server's tools as the model sees them, `mcp_<server>_<tool>` (nanobot's naming), and the name
+ * of its permission, `mcp.<server>`; it holds no `_` so the server can be read back from a tool's name. The engine
+ * keeps a copy in nanobot/dots/protocol.py, kept equal by tests/repo/vendored-nanobot.test.ts.
+ */
+export const MCP_SERVER_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,31}$";
+const MCP_SERVER_NAME = new RegExp(MCP_SERVER_NAME_PATTERN);
+
+/** The permission of the tools of one declared MCP server: `mcp.<server>`. */
+export type McpPermission = `mcp.${string}`;
+/** A permission a Dot's config may name: one of `PERMISSIONS`, or the permission of an MCP server it declares. */
+export type PermissionName = Permission | McpPermission;
+
+export function isMcpServerName(value: unknown): value is string {
+  return typeof value === "string" && MCP_SERVER_NAME.test(value);
+}
+
+export function mcpPermission(server: string): McpPermission {
+  return `mcp.${server}`;
+}
+
+/** The server a permission name is the permission of, or null when it is not an MCP server's. */
+export function mcpServerOf(permission: string): string | null {
+  if (!permission.startsWith("mcp.")) return null;
+  const server = permission.slice("mcp.".length);
+  return isMcpServerName(server) ? server : null;
+}
+
+/** Whether a name is a permission by its form: one of `PERMISSIONS`, or `mcp.<server>` with a valid server name. */
+export function isPermissionName(value: unknown): value is PermissionName {
+  return isPermission(value) || (typeof value === "string" && mcpServerOf(value) !== null);
+}
+
+/**
+ * The words a person is shown for a permission. An MCP server's are written from its name: what its tools do is the
+ * server's, which the host does not know, so it is weighed as high a risk as running commands.
+ */
+export function permissionInfo(permission: string): PermissionInfo | null {
+  if (isPermission(permission)) return PERMISSION_INFO[permission];
+  const server = mcpServerOf(permission);
+  if (server === null) return null;
+  return {
+    label: `MCP server ${server}`,
+    description: `Use the tools of the MCP server "${server}" this Dot's config declares, which act as that server decides.`,
+    risk: "high",
+  };
+}

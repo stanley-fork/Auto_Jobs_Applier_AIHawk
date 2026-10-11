@@ -7,7 +7,7 @@
 import { z } from "zod";
 import type { DotRuntimeConfig } from "./config.js";
 import type { AgentState } from "./states.js";
-import { PERMISSIONS } from "./tools.js";
+import { isPermissionName } from "./tools.js";
 
 /**
  * POSIX join without node:path, so the web client can import this module.
@@ -347,9 +347,14 @@ export interface FileListAnswer {
   entries: FileEntry[];
 }
 
-/** `POST /secrets`. */
+/**
+ * `POST /secrets`: what the engine keeps in memory only, pushed again whenever it starts. `mcp_secrets` are the values
+ * of the secrets the config's MCP servers name (`mcp_servers.<server>.secrets`), by server and name; a server's secret
+ * that is not set is absent.
+ */
 export interface SecretsRequest {
   openrouter_api_key: string;
+  mcp_secrets: Record<string, Record<string, string>>;
 }
 
 /**
@@ -370,6 +375,39 @@ export function checkOpenRouterKey(value: unknown): OpenRouterKeyCheck {
   const key = value.trim();
   if (!new RegExp(`^${OPENROUTER_KEY_PATTERN}$`).test(key)) return { ok: false, problem: `value is not an OpenRouter key: ${OPENROUTER_KEY_RULE}` };
   return { ok: true, key };
+}
+
+/**
+ * What the value of an MCP server's secret is made of, as one rule with two readers like the OpenRouter key's: the host
+ * refuses a value that breaks it when the person sets it (`checkMcpSecret`), and the engine again on `POST /secrets`
+ * (nanobot/dots/protocol.py keeps a copy; tests/repo/vendored-nanobot.test.ts keeps it equal). A secret becomes an
+ * environment variable or an HTTP header, often `Bearer <token>`, so a space is allowed and a control character,
+ * which would end a header or cut a variable, is not.
+ */
+export const MCP_SECRET_PATTERN = "[ -~]+";
+export const MCP_SECRET_RULE = "a secret must be printable ASCII, as it travels in an environment variable or a header";
+
+/** A secret's value as the host stores it (its ends trimmed), or why the value is not one. The value is never in the problem. */
+export type McpSecretCheck = { ok: true; value: string } | { ok: false; problem: string };
+
+export function checkMcpSecret(value: unknown): McpSecretCheck {
+  if (typeof value !== "string" || value.trim() === "") return { ok: false, problem: "value must be a non-empty string" };
+  const trimmed = value.trim();
+  if (!new RegExp(`^${MCP_SECRET_PATTERN}$`).test(trimmed)) return { ok: false, problem: `value is not a secret: ${MCP_SECRET_RULE}` };
+  return { ok: true, value: trimmed };
+}
+
+/** One secret a declared MCP server names, and whether its value is set; never the value. */
+export interface McpSecretState {
+  server: string;
+  name: string;
+  set: boolean;
+}
+
+/** `GET /api/dots/:id/mcp-secrets`: every secret the config's MCP servers name, the servers by name, each one's in its order. */
+export interface McpSecretsAnswer {
+  dot_id: string;
+  secrets: McpSecretState[];
 }
 
 /** `PUT /config` body. */
@@ -450,8 +488,8 @@ export const MAX_RUN_AT_MS = 253_402_300_799_999;
 export const toolInfoSchema = z
   .object({
     name: z.string(),
-    /** The key of the Dot config's `permissions` the tool exercises. */
-    permission: z.enum(PERMISSIONS),
+    /** The key of the Dot config's `permissions` the tool exercises: one of `PERMISSIONS`, or `mcp.<server>`. */
+    permission: z.string().refine(isPermissionName, "unknown permission"),
     /** Whether the model is offered the tool now: its permission is not denied. */
     offered: z.boolean(),
     /** What the tool's schema tells the model it does. */
@@ -460,9 +498,33 @@ export const toolInfoSchema = z
   .strict();
 export type ToolInfo = z.infer<typeof toolInfoSchema>;
 
-/** `GET /tools`, in the engine's table order, which groups the tools by permission. */
+/**
+ * Where a declared MCP server is: `connecting` while the engine starts it or reaches it, `connected` while its tools
+ * are offered, `failed` when it could not (the error says why; the engine tries again when the next turn starts).
+ */
+export const MCP_SERVER_STATES = ["connecting", "connected", "failed"] as const;
+export type McpServerState = (typeof MCP_SERVER_STATES)[number];
+
+/** One MCP server of the Dot's config as the engine has it (nanobot/dots/mcp_servers.py), for `GET /tools`, by name. */
+export const mcpServerStatusSchema = z
+  .object({
+    name: z.string(),
+    state: z.enum(MCP_SERVER_STATES),
+    /** Why a `failed` server is not connected (the command is not installed, a secret is not set); null otherwise. */
+    error: z.string().nullable(),
+    /** How many tools it serves (0 while it is not connected). */
+    tools: z.number().int().nonnegative(),
+  })
+  .strict();
+export type McpServerStatus = z.infer<typeof mcpServerStatusSchema>;
+
+/**
+ * `GET /tools`: the engine's tools in its table order, which groups them by permission, then the tools of the
+ * declared MCP servers that are connected; and every declared server with its state.
+ */
 export interface ToolListAnswer {
   tools: ToolInfo[];
+  mcp_servers: McpServerStatus[];
 }
 
 /** Where a skill comes from: it ships with invisible_dots, or the Dot wrote it under /home/dot/skills. */

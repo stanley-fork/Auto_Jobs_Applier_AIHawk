@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { AGENT_STATES, type AgentState, type EventSource, type VmState } from "./states.js";
 import { MAX_RUN_AT_MS } from "./protocol.js";
-import { PERMISSIONS, type Permission } from "./tools.js";
+import { isPermissionName, type PermissionName } from "./tools.js";
 
 /**
  * The most events one read of the event log returns (`GET /api/dots/:id/events?limit=`): the store clamps to it, the
@@ -138,7 +138,7 @@ export interface ApprovalRequestedData {
   approval_id: string;
   task_id?: string;
   tool: string;
-  permission: Permission;
+  permission: PermissionName;
   arguments: Record<string, unknown>;
   reason: string;
 }
@@ -334,7 +334,8 @@ export function parseInboundEvent(value: unknown): InboundEvent {
 
 const outboundBase = { seq: z.number().int().positive(), id: nonEmpty, ts: isoTimestamp };
 const identityData = z.object({ identity_id: nonEmpty, name: z.string() });
-const permission = z.enum(PERMISSIONS);
+// One of `PERMISSIONS`, or the permission of an MCP server the Dot's config declares (`mcp.<server>`).
+const permission = z.string().refine(isPermissionName, "unknown permission");
 const spentUsd = z.number().nonnegative().optional();
 
 export const outboundEventSchema = z.discriminatedUnion("type", [
