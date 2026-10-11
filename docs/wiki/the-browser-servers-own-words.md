@@ -67,6 +67,22 @@ text in the background. Four tools of the server came in: `browser_read_html`,
 its own name. An image the server answers with is shown, so `browser_click_at`
 returns the page after the click.
 
+## browser_evaluate, measured
+
+On 0.71.0, four verification tasks (three documentation pages, a Google result,
+a link and back, a PyPI release) made 66 calls, and `browser_evaluate` was the
+most frequent at 14: mostly to read text, a heading or a link that
+`browser_read_text` returns. 0.71.1 changed only that tool's words and the rung
+that names it: last, and which tool reads text, markup or a control instead.
+The same four tasks on 0.71.1 made 12 calls of it out of 78. The documentation
+task went from 6 to 3, the link task from 3 to 1. The PyPI task used it 7 times,
+and rightly: the release was 15 minutes old, the page showed only "15 minutes
+ago", and the date was in the `datetime` attribute of a `<time>` element, which
+no reading tool returns. The Google task took a longer path through the
+consent page (10 `browser_click_at`), which is the site, not the server. One
+run per task is not a statistic; it shows the calls that remain are the ones the
+tool is for.
+
 ## What it costs
 
 Counted with tiktoken (o200k), with every permission allowed: the page tools'
