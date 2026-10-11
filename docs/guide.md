@@ -43,7 +43,7 @@ OpenRouter, paid with your key.
 > thing published is the golden image, built by CI from this repository's pinned
 > inputs and downloaded by `image build` when its inputs are yours; everything
 > else you build on your own machine. The acceptance run (`tests/e2e/run.ts`)
-> passes its 15 steps on a Linux host with KVM (the linux-host container on
+> passes its 16 steps on a Linux host with KVM (the linux-host container on
 > WSL). On Windows a Dot's VM boots under the Windows Hypervisor Platform with the CPU
 > model `host,-vmx,-svm` (measured; plain `-cpu host` pauses it), and the rest
 > of the lifecycle there was driven by hand through the web client, not by an
@@ -724,7 +724,7 @@ Alpha. Nothing is released yet; the golden image is the one thing published.
 
 - **The real-VM acceptance run is not in CI.** It
   (`tests/e2e/run.ts`: build, create, browse, approve, kill the VM, restart,
-  scan the disk for the key) passes its 15 steps on a Linux host with KVM, run
+  scan the disk for the key) passes its 16 steps on a Linux host with KVM, run
   by hand; CI keeps its contract in step with the product and tests the guest
   with the container smokes, which run its daemons without a VM.
 - **Windows is measured by hand, not by an automated run**: Dots on WHPX were
