@@ -59,6 +59,39 @@ test("allow, ask and deny a permission: the host saves one entry, the Dot's engi
   await expect(row(page, "Automations").getByRole("radio", { name: "Ask" })).toBeChecked();
 });
 
+test("an MCP server is added in the settings, its secret reaches the Dot's engine and never the page, and its state shows", async ({ page, harness }) => {
+  const dot = await harness.createDot("config-mcp");
+  const guest = harness.driver.guestOf(dot.id);
+  guest.mcpTools.set("search", [{ name: "mcp_search_query", description: "Search." }]);
+  await page.goto(settings(harness.webUrl, dot.id));
+  const panel = page.locator("section", { has: page.getByRole("heading", { level: 2, name: "MCP servers" }) });
+
+  await panel.getByRole("button", { name: "Add an MCP server" }).click();
+  const form = page.getByRole("form", { name: "New MCP server" });
+  await form.getByLabel("Name").fill("search");
+  await form.getByText("A URL").click();
+  await form.getByRole("textbox", { name: "URL" }).fill("https://search.example/mcp");
+  await form.getByLabel(/^Secrets/).fill("Authorization");
+  await form.getByRole("button", { name: "Add" }).click();
+  await saveReviewed(page);
+  await expect.poll(async () => (await harness.api.getDot(dot.id)).config.mcp_servers).toEqual({
+    search: { url: "https://search.example/mcp", headers: {}, secrets: ["Authorization"], timeout_s: 120 },
+  });
+
+  // Saved, the server's secret can be set; the engine gets it, the page keeps nothing of it.
+  const secret = panel.getByLabel("Authorization");
+  await secret.fill("Bearer e2e-token");
+  await panel.getByRole("button", { name: "Set" }).click();
+  await expect(secret).toHaveValue("");
+  await expect.poll(() => guest.mcpSecrets).toEqual({ search: { Authorization: "Bearer e2e-token" } });
+  expect(await page.content()).not.toContain("e2e-token");
+
+  // Where it is, as the engine says, and its permission among the others, asked by default.
+  await expect(panel.getByText("Connected, 1 tool")).toBeVisible();
+  await expect(row(page, "MCP server search").getByRole("radio", { name: "Ask" })).toBeChecked();
+  await expect(page.getByRole("list", { name: "Tools of MCP server search" }).getByRole("listitem")).toHaveText(["mcp_search_query"]);
+});
+
 test("a preset sets the rows together, and the review lists every row that moved", async ({ page, harness }) => {
   const dot = await harness.createDot("config-preset");
   await page.goto(settings(harness.webUrl, dot.id));
