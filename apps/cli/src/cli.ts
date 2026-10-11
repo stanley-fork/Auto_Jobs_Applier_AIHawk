@@ -13,7 +13,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import QRCode from "qrcode";
 import { ApiError, type DotSummary, type InvisibleDotsClient, type TaskRecord } from "@invisible-dots/sdk";
-import { CHANNEL_KINDS, DEFAULT_WEB_LISTEN, ENV, type ChannelKind, type ChannelRecord, type ComputerAnswer, type StoredEvent } from "@invisible-dots/shared";
+import { CHANNEL_KINDS, COMPUTER_STOPPED, DEFAULT_WEB_LISTEN, ENV, type ChannelKind, type ChannelRecord, type ComputerAnswer, type McpSecretsAnswer, type StoredEvent, type ToolListAnswer } from "@invisible-dots/shared";
 import { STORE_OPENROUTER_KEY } from "@invisible-dots/vm-manager";
 import { apiUrl, AuthSetupError, connectApi, DEFAULT_URL } from "./api-client.js";
 import { addTelegramChannel } from "./commands.js";
@@ -91,6 +91,7 @@ Using the server:
   invisible-dots tasks <dot>                    list a Dot's tasks
   invisible-dots computer <dot> start|stop|reboot
   invisible-dots browser <dot> identities       list the Dot's browser identities
+  invisible-dots mcp <dot>                      list the MCP servers the Dot's config declares: where each is on its computer, and which secrets are set
   invisible-dots approvals [--all]              list pending (or all) approvals
   invisible-dots approve <approval-id> [--note text] [--always]
                                                 --always also allows that permission for the Dot from now on
@@ -99,6 +100,8 @@ Using the server:
                                                 store the OpenRouter key: asked for in a terminal, read from stdin when piped (never from arguments)
   invisible-dots secret proxy --dot <dot> [--clear]
                                                 set the Dot's VM proxy (socks5://user:pass@host:port), used from its next start; asked for like the key; --clear removes it
+  invisible-dots secret mcp --dot <dot> <server> <name> [--clear]
+                                                set a secret an MCP server of the Dot names (an environment variable or a header, e.g. "Bearer <token>"); asked for like the key; --clear removes it
   invisible-dots channel add telegram --dot <dot>
                                                 link the Dot to a Telegram bot: the token from @BotFather is asked for in a terminal, read from stdin when piped (never from arguments)
   invisible-dots channel link whatsapp --dot <dot>
@@ -263,12 +266,29 @@ function channelRows(rows: { dot: string; channel: ChannelRecord }[]): string {
 }
 
 /** One line of a secret, from the terminal (echo off) or from stdin: never from the arguments, which end up in shell history and ps. */
-async function secretFromInput(io: CliIo, what: { prompt: string; noun: string; command: string }): Promise<string> {
+async function secretFromInput(io: CliIo, what: { prompt: string; noun: string; command: string; spaces?: true }): Promise<string> {
   if (io.stdinIsTTY) io.stderr(`paste the ${what.prompt}, then press Enter:\n`);
   const value = (io.stdinIsTTY ? await io.readSecret() : await io.readStdin()).trim();
   if (!value) throw new UsageError(`no ${what.noun} given; run "${what.command}" in a terminal and paste it, or pipe it in`);
-  if (/\s/.test(value)) throw new UsageError(`the ${what.noun} on stdin contains whitespace; pass only the ${what.noun}`);
+  // A header's value may be "Bearer <token>"; a key or a proxy never has a space, and a line break is never part of one.
+  if (what.spaces ? /[\r\n]/.test(value) : /\s/.test(value)) {
+    throw new UsageError(`the ${what.noun} on stdin contains ${what.spaces ? "a line break" : "whitespace"}; pass only the ${what.noun}`);
+  }
   return value;
+}
+
+function mcpRows(tools: ToolListAnswer | null, secrets: McpSecretsAnswer): string {
+  const servers = new Set([...(tools?.mcp_servers ?? []).map((server) => server.name), ...secrets.secrets.map((secret) => secret.server)]);
+  if (servers.size === 0 && tools !== null) return "no MCP servers\n";
+  const state = (name: string) => {
+    if (tools === null) return "computer stopped";
+    const server = tools.mcp_servers.find((s) => s.name === name);
+    if (server === undefined) return "-";
+    return server.state === "connected" ? `connected, ${server.tools} tools` : server.state === "failed" ? `failed: ${oneLine(server.error ?? "", 80)}` : server.state;
+  };
+  const secretsOf = (name: string) =>
+    secrets.secrets.filter((secret) => secret.server === name).map((secret) => `${secret.name}${secret.set ? "" : " (not set)"}`).join(", ") || "-";
+  return pad([["SERVER", "STATE", "SECRETS"], ...[...servers].map((name) => [name, state(name), secretsOf(name)])]);
 }
 
 function channelKind(value: string): ChannelKind {
@@ -466,8 +486,33 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
         out(approval, `approval ${approval.id} ${approval.status}\n`);
         return EXIT.ok;
       }
+      case "mcp": {
+        const name = need(args, 0, "<dot>");
+        const c = await api();
+        const secrets = await c.mcpSecrets(name);
+        let tools: ToolListAnswer | null = null;
+        try {
+          tools = await c.listTools(name);
+        } catch (error) {
+          // A stopped computer has no engine to ask where the servers are; their secrets are the host's.
+          if (!(error instanceof ApiError && error.code === COMPUTER_STOPPED)) throw error;
+        }
+        out({ mcp_servers: tools?.mcp_servers ?? null, secrets: secrets.secrets }, mcpRows(tools, secrets));
+        return EXIT.ok;
+      }
       case "secret": {
-        const kind = need(args, 0, "openrouter|proxy");
+        const kind = need(args, 0, "openrouter|proxy|mcp");
+        if (kind === "mcp") {
+          if (values.dot === undefined || values.dot === "") throw new UsageError("missing --dot <dot>");
+          const server = need(args, 1, "<server>");
+          const secretName = need(args, 2, "<name>");
+          if (args.length > 3) throw new UsageError("the secret is read from stdin, never from arguments (they end up in shell history and ps)");
+          const command = `invisible-dots secret mcp --dot ${values.dot} ${server} ${secretName}`;
+          const value = values.clear ? null : await secretFromInput(io, { prompt: `value of ${secretName} for the MCP server ${server}`, noun: "secret", command, spaces: true });
+          const result = await (await api()).setMcpSecret(values.dot, server, secretName, value);
+          out(result, `${secretName} of the MCP server ${server} ${value === null ? "cleared" : "stored"} for Dot ${result.dot_id}; a running Dot starts the server again with it\n`);
+          return EXIT.ok;
+        }
         if (kind === "proxy") {
           if (values.dot === undefined || values.dot === "") throw new UsageError("missing --dot <dot>");
           if (args.length > 1) throw new UsageError("the proxy is read from stdin, never from arguments (they end up in shell history and ps)");
@@ -476,7 +521,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
           out(result, result.proxy ? `VM proxy stored for Dot ${result.dot_id}; it is used from the Dot's next start\n` : `Dot ${result.dot_id} goes out directly from its next start\n`);
           return EXIT.ok;
         }
-        if (kind !== "openrouter") throw new UsageError(`unknown secret "${kind}": openrouter or proxy`);
+        if (kind !== "openrouter") throw new UsageError(`unknown secret "${kind}": openrouter, proxy or mcp`);
         if (args.length > 1) {
           throw new UsageError("the key is read from stdin, never from arguments (they end up in shell history and ps)");
         }

@@ -349,7 +349,8 @@ describe.each(testAdapters())("control-plane API (%s)", (kind) => {
     expect((await fetch(`${base}/api/dots/${dot.id}/tools`)).status).toBe(401);
 
     // Tools: the table, and what the model is offered follows the permissions the config pushed.
-    const none = await api.listTools(dot.id);
+    const { tools: none, mcp_servers } = await api.listTools(dot.id);
+    expect(mcp_servers).toEqual([]);
     expect(none.map((t) => t.name)).toEqual([
       "exec",
       "read_file",
@@ -366,8 +367,8 @@ describe.each(testAdapters())("control-plane API (%s)", (kind) => {
   files.write: deny
   automations: deny
 `);
-    await waitFor(async () => (await api.listTools(dot.id)).some((t) => !t.offered), "permissions pushed");
-    expect(Object.fromEntries((await api.listTools(dot.id)).map((t) => [t.name, t.offered]))).toEqual({
+    await waitFor(async () => (await api.listTools(dot.id)).tools.some((t) => !t.offered), "permissions pushed");
+    expect(Object.fromEntries((await api.listTools(dot.id)).tools.map((t) => [t.name, t.offered]))).toEqual({
       exec: true,
       read_file: true,
       write_file: false,
@@ -636,6 +637,25 @@ describe.each(testAdapters())("control-plane API (%s)", (kind) => {
     expect(listed).not.toContain("hunter2");
     expect(listed).not.toContain("proxy.test");
     expect((await create({ name: "Number", proxy: 8080 })).status).toBe(400);
+  });
+
+  it("an MCP server's secrets are set and cleared through the API and the SDK, and no answer carries a value", async () => {
+    const dot = await api.createDot(`${yaml("mcp-api")}mcp_servers:\n  web:\n    url: https://web.example/mcp\n    secrets: [Authorization]\n`);
+    await waitUntilSettledReady(scheduler, driver, dot.id, "mcp-api");
+    const route = `${base}/api/dots/${dot.id}/mcp-secrets/web/Authorization`;
+    expect((await fetch(route, { method: "PUT", body: JSON.stringify({ value: "x" }), headers: { "content-type": "application/json" } })).status).toBe(401);
+    expect((await fetch(`${base}/api/dots/${dot.id}/mcp-secrets`)).status).toBe(401);
+
+    const set = await api.setMcpSecret(dot.id, "web", "Authorization", "Bearer api-1");
+    expect(set).toEqual({ dot_id: dot.id, secrets: [{ server: "web", name: "Authorization", set: true }] });
+    expect(driver.guestOf(dot.id).mcpSecrets).toEqual({ web: { Authorization: "Bearer api-1" } });
+    expect(JSON.stringify(await api.mcpSecrets(dot.id))).not.toContain("api-1");
+
+    // A PUT with no value is refused, not taken as a clear; the DELETE clears.
+    const empty = await fetch(route, { method: "PUT", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ value: null }) });
+    expect(empty.status).toBe(400);
+    expect((await api.setMcpSecret(dot.id, "web", "Authorization", null)).secrets[0]!.set).toBe(false);
+    await expect(api.setMcpSecret(dot.id, "nope", "Authorization", "x")).rejects.toMatchObject({ status: 404 });
   });
 
   it("an identity's frame is a JPEG of an open one, and close ends it, through the API and the SDK", async () => {

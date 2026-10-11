@@ -160,7 +160,8 @@ describe("VmManagerDriver over VmManager", () => {
     const endpoint = { dotId: DOT, port: started.guestPort };
     const health = await driver.waitForHealth(endpoint, TOKEN, { timeoutMs: 2_000, intervalMs: 5, requestTimeoutMs: 1_000 });
     expect(health).toMatchObject({ agentd: "ok", agent: { status: "ok" } });
-    await driver.guest(endpoint, TOKEN).pushSecrets("sk-or-x");
+    await driver.guest(endpoint, TOKEN).pushSecrets({ openrouter_api_key: "sk-or-x", mcp_secrets: { time: { TOKEN: "t-1" } } });
+    expect(guest?.mcpSecrets).toEqual({ time: { TOKEN: "t-1" } });
     expect(guest?.openrouterKey).toBe("sk-or-x");
     // Another token cannot check the guest's proof, so it is never sent; waiting does not help.
     await expect(driver.guest(endpoint, "wrong-token-0000").health()).rejects.toMatchObject({ code: "guest_unproven" });

@@ -4,7 +4,7 @@
  * database, the VM layer or a guest happens here.
  */
 import { randomBytes } from "node:crypto";
-import { DotChangedError, DotNameTakenError, GLOBAL_SCOPE, OPENROUTER_KEY_NAME, VM_PROXY_NAME, type Database } from "@invisible-dots/database";
+import { DotChangedError, DotNameTakenError, GLOBAL_SCOPE, mcpSecretName, OPENROUTER_KEY_NAME, VM_PROXY_NAME, type Database } from "@invisible-dots/database";
 import { EventLog, USER_MESSAGE_EVENT } from "@invisible-dots/events";
 import type {
   AcceptedAnswer,
@@ -21,6 +21,7 @@ import type {
 import {
   APPROVAL_NOTE_MAX,
   checkHomePath,
+  checkMcpSecret,
   checkOpenRouterKey,
   COMPUTER_STOPPED,
   computerIsUp,
@@ -33,7 +34,9 @@ import {
   newId,
   parseDotConfig,
   parseMessageOrigin,
+  mcpServerNames,
   parseSize,
+  permissionNames,
   TASK_CANCELLED_SYSTEM_EVENT,
   TERMINAL_TASK_STATES,
   vmName,
@@ -44,11 +47,12 @@ import {
   type FilesListAnswer,
   type InboundEvent,
   type ListOrder,
+  type McpSecretsAnswer,
   type MessageOrigin,
   type StoredEvent,
   type SystemAnswer,
   type Skill,
-  type ToolInfo,
+  type ToolListAnswer,
 } from "@invisible-dots/shared";
 import { Dispatcher } from "./dispatcher.js";
 import { guestErrorCode, guestErrorStatus, type ComputerDriver, type GuestApi } from "./driver.js";
@@ -304,6 +308,8 @@ export class Scheduler {
         const logged = await this.events.appendHostIn(tx, current.id, "dot.updated", { name: config.name });
         const updated = await tx.dots.updateConfig(current.id, config, expectedConfigVersion);
         if (!updated) throw notFound("Dot", idOrName);
+        // A secret of a server the config no longer declares, or no longer names, goes with it.
+        await tx.secrets.deleteUndeclaredMcpSecrets(current.id, config.mcp_servers);
         return { updated, logged };
       });
     } catch (error) {
@@ -314,19 +320,20 @@ export class Scheduler {
       throw error;
     }
     this.events.publish(saved.logged);
-    await this.#pushConfig(saved.updated);
+    await this.#pushToGuest(saved.updated);
     return saved.updated;
   }
 
   /**
-   * The Dot's saved config changed (a PATCH, an "always allow"; `dot.updated` was logged with the change): push it to
-   * the guest. A failed push does not fail the change: the config is pushed again on the next READY.
+   * The Dot's saved config changed (a PATCH, an "always allow"; `dot.updated` was logged with the change), or a secret of
+   * its MCP servers did: push the secrets and the config to the guest. A failed push does not fail the change: both are
+   * pushed again on the next READY.
    */
-  async #pushConfig(dot: DotRecord): Promise<void> {
+  async #pushToGuest(dot: DotRecord): Promise<void> {
     try {
       await this.lifecycle.syncGuest(dot.id);
     } catch (error) {
-      this.#log.warn("config saved but the push to the guest failed; it is pushed again on the next READY", {
+      this.#log.warn("saved, but the push to the guest failed; it is pushed again on the next READY", {
         dotId: dot.id,
         error: errorMessage(error),
       });
@@ -650,10 +657,13 @@ export class Scheduler {
 
   // The tools and the skills: the Dot's engine keeps both, read through the computer
 
-  /** The Dot's tools, each with the permission it exercises and whether the model is offered it now. */
-  async listTools(idOrName: string): Promise<ToolInfo[]> {
+  /**
+   * The Dot's tools, each with the permission it exercises and whether the model is offered it now, and the MCP servers
+   * its config declares with where each is (connecting, connected, failed and why).
+   */
+  async listTools(idOrName: string): Promise<ToolListAnswer> {
     const { dotId, guest } = await this.#runningGuest(idOrName);
-    return (await this.#guestCall(dotId, "list tools", () => guest.listTools())).tools;
+    return this.#guestCall(dotId, "list tools", () => guest.listTools());
   }
 
   /** The Dot's skills, the built-in ones and its own, each with its whole file. */
@@ -732,6 +742,10 @@ export class Scheduler {
         // "Always allow" changes the Dot's config: that is told by the event of every config change, in the same commit.
         const dot = always ? await tx.dots.get(existing.dot_id) : null;
         if (always && !dot) throw notFound("Dot", existing.dot_id);
+        // The permission of an MCP server the config no longer declares has nothing left to allow.
+        if (dot && !permissionNames(dot.config).includes(existing.permission as never)) {
+          throw new ControlPlaneError(409, "permission_gone", `the Dot's config no longer has the permission ${existing.permission}, so it cannot be allowed always`);
+        }
         const updated = dot ? await this.events.appendHostIn(tx, existing.dot_id, "dot.updated", { name: dot.name }) : null;
         const resolved = await tx.approvals.resolve(id, decision === "approve" ? "approved" : "rejected", note ?? null);
         if (!resolved) {
@@ -746,7 +760,7 @@ export class Scheduler {
       });
       resolved = stored.resolved;
       for (const logged of stored.logged) this.events.publish(logged);
-      if (stored.reconfigured) await this.#pushConfig(stored.reconfigured);
+      if (stored.reconfigured) await this.#pushToGuest(stored.reconfigured);
     } finally {
       release?.();
     }
@@ -807,6 +821,39 @@ export class Scheduler {
   async vmProxy(idOrName: string): Promise<{ dot_id: string; proxy: boolean }> {
     const dot = await this.requireDot(idOrName);
     return { dot_id: dot.id, proxy: (await this.db.secrets.get(dot.id, VM_PROXY_NAME)) !== null };
+  }
+
+  /** Every secret the Dot's MCP servers name, and whether each is set; never a value. */
+  async mcpSecrets(idOrName: string): Promise<McpSecretsAnswer> {
+    const dot = await this.requireDot(idOrName);
+    const set = await this.db.secrets.mcpSecrets(dot.id, dot.config.mcp_servers);
+    const secrets = mcpServerNames(dot.config).flatMap((server) =>
+      dot.config.mcp_servers[server]!.secrets.map((name) => ({ server, name, set: set[server]?.[name] !== undefined })),
+    );
+    return { dot_id: dot.id, secrets };
+  }
+
+  /**
+   * Set the value of a secret an MCP server of the Dot's config names, or clear it with null, and push the secrets to
+   * the guest when it runs: the server starts again with it. A secret the config does not name is refused, so none is
+   * stored that the config would not keep. The answer never carries a value.
+   */
+  async setMcpSecret(idOrName: string, server: string, name: string, value: unknown): Promise<McpSecretsAnswer> {
+    const dot = await this.requireDot(idOrName);
+    const declared = dot.config.mcp_servers[server];
+    if (!declared) throw new ControlPlaneError(404, "not_found", `Dot ${dot.name} declares no MCP server "${server}"`);
+    if (!declared.secrets.includes(name)) {
+      throw new ControlPlaneError(404, "not_found", `the MCP server "${server}" of Dot ${dot.name} names no secret "${name}"`);
+    }
+    if (value === null) {
+      await this.db.secrets.delete(dot.id, mcpSecretName(server, name));
+    } else {
+      const checked = checkMcpSecret(value);
+      if (!checked.ok) throw new ControlPlaneError(400, "invalid_request", checked.problem);
+      await this.db.secrets.put(dot.id, mcpSecretName(server, name), checked.value);
+    }
+    await this.#pushToGuest(dot);
+    return this.mcpSecrets(dot.id);
   }
 
   /** Store the OpenRouter key (global or per Dot) and push it to the READY guests it applies to. */

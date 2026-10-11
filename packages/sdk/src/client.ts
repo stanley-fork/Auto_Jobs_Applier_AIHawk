@@ -8,6 +8,7 @@ import {
   type BrowserIdentity,
   type ChannelKind,
   type ListOrder,
+  type McpSecretsAnswer,
   type StoredEvent,
   type ToolInfo,
   type Skill,
@@ -168,6 +169,17 @@ export class InvisibleDotsClient {
   /** Whether a Dot has a VM proxy, never its value. */
   vmProxy(idOrName: string): Promise<{ dot_id: string; proxy: boolean }> {
     return this.#json("GET", `/api/dots/${encodeURIComponent(idOrName)}/proxy`);
+  }
+
+  /** Every secret the Dot's MCP servers name, and whether each is set; never a value. */
+  mcpSecrets(idOrName: string): Promise<McpSecretsAnswer> {
+    return this.#json("GET", `/api/dots/${enc(idOrName)}/mcp-secrets`);
+  }
+
+  /** Set a secret an MCP server of the Dot names, or clear it with null; the server starts again with it. Never echoed back. */
+  setMcpSecret(idOrName: string, server: string, name: string, value: string | null): Promise<McpSecretsAnswer> {
+    const path = `/api/dots/${enc(idOrName)}/mcp-secrets/${enc(server)}/${enc(name)}`;
+    return value === null ? this.#json("DELETE", path) : this.#json("PUT", path, { body: { value } });
   }
 
   // Dots
@@ -409,9 +421,12 @@ export class InvisibleDotsClient {
 
   // The tools and the skills of the Dot's engine: the computer must be running (409 computer_stopped)
 
-  /** The Dot's tools, each with the permission it exercises and whether the model is offered it now. */
-  async listTools(idOrName: string): Promise<ToolInfo[]> {
-    return (await this.#json<ToolListAnswer>("GET", `/api/dots/${enc(idOrName)}/tools`)).tools;
+  /**
+   * The Dot's tools, each with the permission it exercises and whether the model is offered it now, and the MCP servers
+   * its config declares with where each is.
+   */
+  listTools(idOrName: string): Promise<ToolListAnswer> {
+    return this.#json<ToolListAnswer>("GET", `/api/dots/${enc(idOrName)}/tools`);
   }
 
   /** The Dot's skills, the built-in ones and its own, each with its whole file. */

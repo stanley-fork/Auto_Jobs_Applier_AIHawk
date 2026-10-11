@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   MAX_RUN_AT_MS,
+  mcpServerStatusSchema,
   OUTBOUND_EVENT_TYPES,
   parseDotConfig,
   parseOutboundEvent,
@@ -30,7 +31,13 @@ interface OfferingCase {
 
 const shapes = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../../invisible_engine_dots/tests/dots/wire_shapes.json", import.meta.url)), "utf8"),
-) as { limits: { max_run_at_ms: number }; outbound_events: { type: string; data: Record<string, unknown> }[]; tool_offering: OfferingCase[]; skills: unknown[] };
+) as {
+  limits: { max_run_at_ms: number };
+  outbound_events: { type: string; data: Record<string, unknown> }[];
+  tool_offering: OfferingCase[];
+  mcp: { tools: unknown[]; mcp_servers: unknown[] };
+  skills: unknown[];
+};
 
 const baseConfig = toRuntimeConfig(parseDotConfig("name: shapes\nmodel:\n  provider: openrouter\n  id: test/model\n"));
 
@@ -117,6 +124,15 @@ describe("what the engine answers, as the host describes it", () => {
       expect(names).toEqual((shapes.tool_offering[0]!.tools as { name: string }[]).map((row) => row.name));
       expect((offering.tools as { permission: string }[]).every((row) => PERMISSIONS.includes(row.permission as never))).toBe(true);
     }
+  });
+
+  it("what the engine says of the MCP servers a config declares parses with the host's schemas: their tools under `mcp.<server>`, their states", () => {
+    expect(shapes.mcp.tools.length).toBeGreaterThan(0);
+    for (const row of shapes.mcp.tools) expect(toolInfoSchema.safeParse(row).error?.issues, JSON.stringify(row)).toBeUndefined();
+    expect(new Set((shapes.mcp.tools as { permission: string }[]).map((row) => row.permission))).toEqual(new Set(["mcp.tools"]));
+    for (const status of shapes.mcp.mcp_servers) expect(mcpServerStatusSchema.safeParse(status).error?.issues, JSON.stringify(status)).toBeUndefined();
+    expect((shapes.mcp.mcp_servers as { name: string; state: string }[]).map((status) => [status.name, status.state])).toEqual([["keyed", "failed"], ["tools", "connected"]]);
+    expect(toolInfoSchema.safeParse({ ...(shapes.mcp.tools[0] as object), permission: "mcp.Not_A_Server" }).success).toBe(false);
   });
 
   it("the fake guest holds the engine's tools to the same permissions, and offers what the engine offers for the same config", async () => {

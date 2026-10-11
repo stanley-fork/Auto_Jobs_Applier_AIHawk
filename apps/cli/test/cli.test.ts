@@ -154,6 +154,21 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return send(res, 200, { id: "apr_1", status: "rejected", note: body?.note ?? null });
     case "PUT /api/secrets/openrouter":
       return send(res, 200, { pushed: 2 });
+    case `GET /api/dots/${dot.id}/mcp-secrets`:
+      return send(res, 200, { dot_id: dot.id, secrets: [{ server: "web", name: "Authorization", set: false }] });
+    case `PUT /api/dots/${dot.id}/mcp-secrets/web/Authorization`:
+      return send(res, 200, { dot_id: dot.id, secrets: [{ server: "web", name: "Authorization", set: true }] });
+    case `DELETE /api/dots/${dot.id}/mcp-secrets/web/Authorization`:
+      return send(res, 200, { dot_id: dot.id, secrets: [{ server: "web", name: "Authorization", set: false }] });
+    case `GET /api/dots/${dot.id}/tools`:
+      if (stopped) return send(res, 409, { error: "computer_stopped", message: "the computer of Dot fare-watch is STOPPED; start it first" });
+      return send(res, 200, {
+        tools: [],
+        mcp_servers: [
+          { name: "time", state: "connected", error: null, tools: 2 },
+          { name: "web", state: "failed", error: "its secret Authorization is not set", tools: 0 },
+        ],
+      });
     case `GET /api/dots/${dot.id}/channels`:
       return send(res, 200, { channels: whatsappLinked ? [channel, { ...channel, kind: "whatsapp", account: "15550001111", peers: [] }] : [channel] });
     case `PUT /api/dots/${dot.id}/channels/telegram`:
@@ -402,6 +417,36 @@ describe("commands", () => {
     expect(inArgs.code).toBe(EXIT.usage);
     expect(inArgs.stderr).toMatch(/never from arguments/);
     expect((await cli(["secret", "openrouter"], { stdin: "  " })).code).toBe(EXIT.usage);
+  });
+
+  it("secret mcp reads the value from stdin only, keeps a space a header needs, and --clear removes it", async () => {
+    const stored = await cli(["secret", "mcp", "--dot", "fare-watch", "web", "Authorization"], { stdin: "Bearer tok-1\n" });
+    expect(stored.code).toBe(EXIT.ok);
+    expect(stored.stdout).toContain("Authorization of the MCP server web stored");
+    expect(requests.at(-1)).toMatchObject({ method: "PUT", body: { value: "Bearer tok-1" } });
+    expect(stored.stdout).not.toContain("tok-1");
+    const cleared = await cli(["secret", "mcp", "--dot", "fare-watch", "web", "Authorization", "--clear"]);
+    expect(cleared.stdout).toContain("cleared");
+    expect(requests.at(-1)?.method).toBe("DELETE");
+    const inArgs = await cli(["secret", "mcp", "--dot", "fare-watch", "web", "Authorization", "tok-1"]);
+    expect(inArgs.code).toBe(EXIT.usage);
+    expect(inArgs.stderr).toMatch(/never from arguments/);
+    expect((await cli(["secret", "mcp", "web", "Authorization"], { stdin: "x" })).stderr).toContain("missing --dot");
+  });
+
+  it("mcp lists the declared servers with where each is and which secrets are set, and still the secrets of a stopped Dot", async () => {
+    const listed = await cli(["mcp", "fare-watch"]);
+    expect(listed.code).toBe(EXIT.ok);
+    expect(listed.stdout).toMatch(/time\s+connected, 2 tools\s+-/);
+    expect(listed.stdout).toMatch(/web\s+failed: its secret Authorization is not set\s+Authorization \(not set\)/);
+    stopped = true;
+    try {
+      const off = await cli(["mcp", "fare-watch"]);
+      expect(off.code).toBe(EXIT.ok);
+      expect(off.stdout).toMatch(/web\s+computer stopped\s+Authorization \(not set\)/);
+    } finally {
+      stopped = false;
+    }
   });
 
   it("secret openrouter in a terminal reads one line, which Enter ends on every host", async () => {

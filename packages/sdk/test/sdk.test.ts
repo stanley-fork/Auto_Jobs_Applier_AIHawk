@@ -59,7 +59,7 @@ describe("InvisibleDotsClient", () => {
     ]);
   });
 
-  it("the tool method uses the route the API serves, the name encoded, and unwraps the answer", async () => {
+  it("the tool method uses the route the API serves, the name encoded, and returns the tools with the MCP servers", async () => {
     const seen: string[] = [];
     const client = new InvisibleDotsClient({
       baseUrl: "http://api.test",
@@ -67,12 +67,34 @@ describe("InvisibleDotsClient", () => {
       fetch: async (input, init) => {
         const request = new Request(input, init);
         seen.push(`${request.method} ${new URL(request.url).pathname} ${await request.text()}`.trim());
-        return new Response(JSON.stringify({ tools: [{ name: "exec", permission: "computer.exec", offered: true, description: "Run." }] }));
+        return new Response(JSON.stringify({ tools: [{ name: "exec", permission: "computer.exec", offered: true, description: "Run." }], mcp_servers: [] }));
       },
     });
 
-    expect(await client.listTools("a b")).toEqual([{ name: "exec", permission: "computer.exec", offered: true, description: "Run." }]);
+    expect(await client.listTools("a b")).toEqual({ tools: [{ name: "exec", permission: "computer.exec", offered: true, description: "Run." }], mcp_servers: [] });
     expect(seen).toEqual(["GET /api/dots/a%20b/tools"]);
+  });
+
+  it("the MCP secret methods use the routes the API serves: a PUT with the value sets, a DELETE clears, every part encoded", async () => {
+    const seen: string[] = [];
+    const client = new InvisibleDotsClient({
+      baseUrl: "http://api.test",
+      token: "t",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        seen.push(`${request.method} ${new URL(request.url).pathname} ${await request.text()}`.trim());
+        return new Response(JSON.stringify({ dot_id: "d", secrets: [] }));
+      },
+    });
+
+    await client.mcpSecrets("a b");
+    await client.setMcpSecret("a b", "web", "X Key", "Bearer t");
+    await client.setMcpSecret("a b", "web", "X Key", null);
+    expect(seen).toEqual([
+      "GET /api/dots/a%20b/mcp-secrets",
+      'PUT /api/dots/a%20b/mcp-secrets/web/X%20Key {"value":"Bearer t"}',
+      "DELETE /api/dots/a%20b/mcp-secrets/web/X%20Key",
+    ]);
   });
 
   it("the skill method uses the route the API serves, the name encoded, and unwraps the answer", async () => {

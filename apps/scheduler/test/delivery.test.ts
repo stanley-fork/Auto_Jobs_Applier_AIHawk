@@ -6,7 +6,7 @@
  */
 import type { Database } from "@invisible-dots/database";
 import { createTestDatabase, testAdapters, type TestDatabase } from "@invisible-dots/database/testing";
-import type { InboundEvent, OutboundEvent } from "@invisible-dots/shared";
+import type { InboundEvent, OutboundEvent, SecretsRequest } from "@invisible-dots/shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Scheduler, type Logger, type SchedulerOptions } from "../src/index.js";
 import type { GuestApi, GuestEndpoint } from "../src/index.js";
@@ -304,8 +304,8 @@ describe.each(testAdapters())("delivery to guests (%s)", (kind) => {
     const logger: Logger = { debug: record("debug"), info: record("info"), warn: record("warn"), error: record("error") };
     const driver = new FakeDriver();
     driver.configureGuest = (g) => {
-      g.pushSecrets = async (key: string) => {
-        throw new FakeGuestError(502, `upstream said: bad request body {"openrouter_api_key":"${key}"}`);
+      g.pushSecrets = async (secrets: SecretsRequest) => {
+        throw new FakeGuestError(502, `upstream said: bad request body {"openrouter_api_key":"${secrets.openrouter_api_key}"}`);
       };
     };
     const { scheduler } = make(driver, { logger });
@@ -315,7 +315,7 @@ describe.each(testAdapters())("delivery to guests (%s)", (kind) => {
     const dotRow = await db.dots.get(dot.id);
     const computer = await db.computers.get(dot.id);
     const events = await db.events.list({ dotId: dot.id });
-    expect(dotRow?.error).toMatch(/did not take the OpenRouter key \(status 502\)/);
+    expect(dotRow?.error).toMatch(/did not take the OpenRouter key and the MCP secrets \(status 502\)/);
     for (const text of [dotRow?.error ?? "", computer?.last_error ?? "", JSON.stringify(events), lines.join("\n")]) {
       expect(text).not.toContain(KEY);
       expect(text).not.toContain(KEY.slice(0, 12));

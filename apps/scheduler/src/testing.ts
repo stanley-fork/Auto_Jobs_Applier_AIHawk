@@ -14,6 +14,8 @@ import {
   checkIdentityRequest,
   IDENTITY_ERROR_STATUS,
   FILE_TOO_LARGE,
+  mcpPermission,
+  mcpServerNames,
   GUEST_PATHS,
   IdentityRequestError,
   newId,
@@ -34,7 +36,9 @@ import {
   type OutboundEvent,
   type OutboundEventDataMap,
   type OutboundEventType,
+  type PermissionName,
   type RefusedEvent,
+  type SecretsRequest,
   type SystemAnswer,
   type ToolInfo,
   type Skill,
@@ -157,6 +161,8 @@ export class FakeGuest implements GuestApi {
   #bootedAt = 0;
   agentState: AgentState = "IDLE";
   openrouterKey: string | null = null;
+  /** The MCP servers' secrets the host pushed last, by server and name. */
+  mcpSecrets: SecretsRequest["mcp_secrets"] = {};
   config: DotRuntimeConfig | null = null;
   checks: GuestChecks = { filesystem_writable: true, network_reachable: true, browser_installed: true };
   readonly outbox: OutboundEvent[] = [];
@@ -180,6 +186,12 @@ export class FakeGuest implements GuestApi {
     { name: "browser_identity_list", permission: "browser.identity.list", description: "List the browser identities." },
     { name: "browser_identity_create", permission: "browser.identity.create", description: "Create a browser identity." },
   ];
+  /**
+   * The tools each declared MCP server serves, by server; a server of the config with none here serves none. A server
+   * named in `mcpFailures` is failed with that error instead, as the engine reports a server it could not start.
+   */
+  readonly mcpTools = new Map<string, Omit<ToolInfo, "offered" | "permission">[]>();
+  readonly mcpFailures = new Map<string, string>();
   /** The skills the fake's engine shows: one built-in by default, as the real one ships; a test adds the Dot's own. */
   skills: Skill[] = [
     {
@@ -216,6 +228,7 @@ export class FakeGuest implements GuestApi {
     this.#pollsSinceBoot = 0;
     this.#bootedAt = Date.now();
     this.openrouterKey = null;
+    this.mcpSecrets = {};
     this.agentState = "IDLE";
     this.emit("agent.started", {});
     this.#catchUp();
@@ -249,6 +262,7 @@ export class FakeGuest implements GuestApi {
   restartAgent(): void {
     this.agentRestarts++;
     this.openrouterKey = null;
+    this.mcpSecrets = {};
     this.disconnectStreams();
     this.emit("agent.started", {});
   }
@@ -336,14 +350,14 @@ export class FakeGuest implements GuestApi {
   }
 
   /** Ask for an approval from inside a task, as the policy engine does on `ask`. */
-  requestApproval(taskId: string | undefined, tool = "browser_identity_delete"): string {
+  requestApproval(taskId: string | undefined, tool = "browser_identity_delete", permission: PermissionName = "browser.identity.delete"): string {
     const approvalId = newId("apr");
     this.emit("agent.state", { state: "WAITING_APPROVAL" });
     this.emit("approval.requested", {
       approval_id: approvalId,
       ...(taskId ? { task_id: taskId } : {}),
       tool,
-      permission: "browser.identity.delete",
+      permission,
       arguments: { identity_id: "shop-abc123" },
       reason: "the tool needs approval",
     });
@@ -384,10 +398,12 @@ export class FakeGuest implements GuestApi {
     };
   }
 
-  async pushSecrets(key: string): Promise<void> {
+  async pushSecrets(secrets: SecretsRequest): Promise<void> {
     this.#reachable("pushSecrets");
-    this.openrouterKey = key;
+    this.openrouterKey = secrets.openrouter_api_key;
+    this.mcpSecrets = structuredClone(secrets.mcp_secrets);
   }
+
 
   /** While set, `putConfig` waits for it (a slow push), and the config is stored when it resolves. */
   configPushGate: Promise<void> | null = null;
@@ -520,7 +536,18 @@ export class FakeGuest implements GuestApi {
     const permissions: Record<string, string | undefined> = this.config?.permissions ?? {};
     const offered = (tool: Omit<ToolInfo, "offered">): boolean =>
       this.config !== null && (permissions[tool.permission] === "allow" || permissions[tool.permission] === "ask");
-    return { tools: this.tools.map((tool) => ({ ...tool, offered: offered(tool) })) };
+    const servers = this.config ? mcpServerNames(this.config) : [];
+    const connected = servers.filter((name) => !this.mcpFailures.has(name));
+    const mcpTools = connected.flatMap((name) => (this.mcpTools.get(name) ?? []).map((tool) => ({ ...tool, permission: mcpPermission(name) })));
+    return {
+      tools: [...this.tools, ...mcpTools].map((tool) => ({ ...tool, offered: offered(tool) })),
+      mcp_servers: servers.map((name) => {
+        const error = this.mcpFailures.get(name);
+        return error === undefined
+          ? { name, state: "connected" as const, error: null, tools: this.mcpTools.get(name)?.length ?? 0 }
+          : { name, state: "failed" as const, error, tools: 0 };
+      }),
+    };
   }
 
   async listSkills(): Promise<SkillListAnswer> {

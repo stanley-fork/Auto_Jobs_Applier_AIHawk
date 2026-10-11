@@ -9,7 +9,7 @@ import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import type { FakeGuest } from "@invisible-dots/scheduler/testing";
-import { GUEST_PROOF_CONTEXT } from "@invisible-dots/shared";
+import { GUEST_PROOF_CONTEXT, type SecretsRequest } from "@invisible-dots/shared";
 
 export interface FakeGuestServer {
   port: number;
@@ -94,7 +94,7 @@ export async function serveFakeGuest(
           response.writeHead(200, { "content-type": "image/png" }).end(Buffer.from(await current.screenshot()));
           return;
         case "POST /v1/agent/secrets":
-          await current.pushSecrets(((await readJson(request)) as { openrouter_api_key: string }).openrouter_api_key);
+          await current.pushSecrets((await readJson(request)) as SecretsRequest);
           return send(response, 204);
         case "PUT /v1/agent/config":
           await current.putConfig((await readJson(request)) as never);
