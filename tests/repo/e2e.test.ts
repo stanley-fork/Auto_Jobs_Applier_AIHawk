@@ -26,6 +26,7 @@ import { USAGE } from "@invisible-dots/cli";
 import {
   type AgentStateAnswer as SharedAgentStateAnswer,
   HOST_EVENT_TYPES,
+  mcpServerOf,
   OUTBOUND_EVENT_TYPES,
   PERMISSIONS,
   parseDotConfig,
@@ -144,17 +145,32 @@ describe("the e2e run's contract with the product", () => {
       ...run.matchAll(/^\s+\["([a-z_]+)", "[a-z.]+"\],?$/gm),
     ].map((m) => m[1]!);
     expect(tools.length).toBeGreaterThan(10);
-    for (const tool of tools) expect(Object.keys(TOOLS), `run.ts names the tool ${tool}`).toContain(tool);
+    // A tool of an MCP server is the server's, not the table's: its server is one the run declares (`mcpServers`).
+    const declared = (server: string) => new RegExp(`mcpServers: \\{[^}]*\\b${server}\\b`).test(run);
+    for (const tool of tools) {
+      const server = /^mcp_([a-z0-9-]+)_/.exec(tool)?.[1];
+      if (server !== undefined) expect(declared(server), `run.ts names ${tool} of an MCP server it does not declare`).toBe(true);
+      else expect(Object.keys(TOOLS), `run.ts names the tool ${tool}`).toContain(tool);
+    }
     // A dotted name in quotes is an event type or a permission, unless it is one of the few hosts and files the run writes.
     const other = new Set(["example.com", "title.txt", "approval.txt", "approval-counter.txt", "exec-marker.txt", "api.token", "qemu.json", "seed.iso", "serial.log", "disk.qcow2", "screenshot.png", "frame.jpg", "summary.json", "summary.txt", "events.txt", "server.log", "image-build.log", "cli.log", "dot.yaml"]);
     const dotted = [...run.matchAll(/"([a-z]+(?:\.[a-z]+)+)"/g)].map((m) => m[1]!).filter((name) => !other.has(name));
     expect(dotted.length).toBeGreaterThan(10);
+    const mcpPermissionOfDeclared = (name: string) => {
+      const server = mcpServerOf(name);
+      return server !== null && declared(server);
+    };
     for (const name of new Set(dotted)) {
-      expect((EVENTS as readonly string[]).includes(name) || (PERMISSIONS as readonly string[]).includes(name), `run.ts names ${name}: not in EVENTS and not a permission`).toBe(true);
+      expect(
+        (EVENTS as readonly string[]).includes(name) || (PERMISSIONS as readonly string[]).includes(name) || mcpPermissionOfDeclared(name),
+        `run.ts names ${name}: not in EVENTS, not a permission, not the permission of an MCP server it declares`,
+      ).toBe(true);
     }
-    // Every permission the run sets is one of the Dot's.
+    // Every permission the run sets is one of the Dot's, or the permission of an MCP server it declares.
     for (const m of run.matchAll(/permissions: \{([^}]*)\}/g)) {
-      for (const key of m[1]!.matchAll(/"([a-z.]+)":/g)) expect(PERMISSIONS as readonly string[], key[1]).toContain(key[1]);
+      for (const key of m[1]!.matchAll(/"([a-z0-9.-]+)":/g)) {
+        expect((PERMISSIONS as readonly string[]).includes(key[1]!) || mcpPermissionOfDeclared(key[1]!), key[1]).toBe(true);
+      }
     }
   });
 

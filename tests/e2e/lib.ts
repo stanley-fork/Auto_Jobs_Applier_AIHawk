@@ -447,6 +447,8 @@ export interface DotYamlOptions {
   permissions?: Record<string, "allow" | "ask" | "deny">;
   /** The computer's size; 2 CPUs and 4gb when not given. */
   computer?: { cpu: number; memory: string };
+  /** MCP servers the Dot runs on its computer, by name (architecture section 7). */
+  mcpServers?: Record<string, { command: string; args?: string[]; secrets?: string[] }>;
 }
 
 /** The Dot's config (architecture section 7) as YAML. */
@@ -464,6 +466,17 @@ export function dotYaml(options: DotYamlOptions): string {
     `  memory: ${options.computer?.memory ?? "4gb"}`,
     "  idle_timeout: 0",
     ...(permissions.length > 0 ? ["permissions:", ...permissions.map(([permission, decision]) => `  ${permission}: ${decision}`)] : []),
+    ...(options.mcpServers
+      ? [
+          "mcp_servers:",
+          ...Object.entries(options.mcpServers).flatMap(([name, server]) => [
+            `  ${name}:`,
+            `    command: ${server.command}`,
+            ...(server.args ? [`    args: ${JSON.stringify(server.args)}`] : []),
+            ...(server.secrets ? [`    secrets: ${JSON.stringify(server.secrets)}`] : []),
+          ]),
+        ]
+      : []),
     "",
   ].join("\n");
 }
