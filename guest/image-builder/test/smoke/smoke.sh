@@ -457,7 +457,10 @@ check "GET /tools: the declared server connects through the relay, with its tool
 check "GET /tools: the server whose program is not installed is failed, saying what the relay found" "wait_mcp_state missing failed && api $A/tools | jq -e '.mcp_servers[]|select(.name==\"missing\")|.error|test(\"not-installed\")' >/dev/null"
 # A process's environment is its own user's to read: dot reads the server's, as a command of the model would.
 server_env_of_dot() { su -s /bin/bash dot -c 'for p in $(pgrep -u dot -f fake_tool_server.py); do tr "\\0" "\\n" < /proc/$p/environ; done'; }
-check "the declared server runs as dot, its secret in its environment and on no command line" "pgrep -u dot -f fake_tool_server.py >/dev/null && server_env_of_dot | grep -qx 'TOKEN=$MCP_SECRET' && ! cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q '$MCP_SECRET_SEEN'"
+echo "the declared server's processes: $(ps -eo user=,pid=,args= | grep 'fake_tool_serve[r]' | tr '\n' ';')"
+check "the declared server runs as dot, and nothing of it as another user" "pgrep -u dot -f 'python.*fake_tool_server' >/dev/null && ! ps -eo user=,args= | grep 'fake_tool_serve[r]' | grep -v '^dot ' | grep -qv 'dot-agentd relay'"
+check "the declared server's secret is in its environment, which dot reads" "server_env_of_dot | grep -qx 'TOKEN=$MCP_SECRET' || { echo \"variables read: \$(server_env_of_dot 2>&1 | cut -d= -f1 | sort -u | tr '\n' ' ')\"; false; }"
+check "the declared server's secret is on no command line" "! cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q '$MCP_SECRET_SEEN' || { echo \"found in: \$(grep -l '$MCP_SECRET_SEEN' /proc/[0-9]*/cmdline 2>/dev/null | tr '\n' ' ')\"; false; }"
 ev msg-mcp user.message '{"text":"RUN-TOOL mcp_tools_env {\"name\":\"MODE\"}"}' >/dev/null
 check "a call of the server's tool runs under mcp.tools and answers with the server's environment" "wait_event $STREAM '.type==\"tool.called\" and .data.tool==\"mcp_tools_env\" and .data.ok==true and .data.permission==\"mcp.tools\"' && wait_event $STREAM '.type==\"message.assistant\" and .data.in_reply_to==\"msg-mcp\" and (.data.text|test(\"smoke\"))'"
 check "the prompt of that turn carries the server's instructions, and why the other is not connected" "grep -F 'RUN-TOOL mcp_tools_env' /tmp/fake-full.jsonl | grep -F 'Call echo to repeat a text.' | grep -q 'missing.nNot connected: '"
