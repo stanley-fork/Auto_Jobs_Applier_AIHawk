@@ -413,7 +413,7 @@ check_offered() { # n, label, permissions json, expected tools (sorted JSON)
 BROWSER_GRANTED='"computer.screenshot":"allow","browser.identity.list":"allow","browser.identity.create":"allow","browser.identity.delete":"ask","browser.identity.launch":"allow","browser.identity.close":"allow","browser.navigate":"allow","browser.read":"allow","browser.act":"allow"'
 check_offered 1 "every permission granted (files.write and browser.identity.delete ask)" \
   '{"computer.exec":"allow","files.read":"allow","files.write":"ask","automations":"allow",'"$BROWSER_GRANTED"'}' \
-  '["apply_patch","browser_back","browser_click","browser_click_at","browser_forward","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_text","browser_reload","browser_screenshot","browser_scroll","browser_select_option","browser_snapshot","browser_type","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
+  '["apply_patch","browser_click","browser_click_at","browser_identity_close","browser_identity_create","browser_identity_delete","browser_identity_launch","browser_identity_list","browser_navigate","browser_press_key","browser_read_text","browser_screenshot","browser_scroll","browser_select_option","browser_snapshot","browser_type","computer_screenshot","cron","edit_file","exec","exec_session","find_files","grep","list_dir","list_exec_sessions","read_file","write_file"]'
 check_offered 2 "exec denied, files.read allowed, the rest missing from the map (deny)" \
   '{"computer.exec":"deny","files.read":"allow"}' \
   '["find_files","grep","list_dir","read_file"]'
@@ -430,7 +430,10 @@ check_offered 6 "delete asks, create is denied, nothing else" \
 # GET /tools is the same table seen from the host: the whole table, and `offered` says what the model got.
 # The map of check 3 is pushed again: the model was offered exactly exec and its two sessions tools.
 offered_with 3b '{"computer.exec":"allow"}' >/dev/null
-check "GET /tools through dot-agentd lists the 30 tools of the table, each with a description" "api $A/tools | jq -e '(.tools|length)==30 and all(.tools[]; (.description|length)>0 and (.permission|length)>0)' >/dev/null"
+# As many as the engine's permission table has rows: counted from the table, so a tool added or taken out is not a
+# number to remember here.
+TABLE_TOOLS=$(grep -c '^        "[a-z_]*": ToolEntry(' "$ENGINE_TESTS/../nanobot/dots/permissions.py")
+check "GET /tools through dot-agentd lists the $TABLE_TOOLS tools of the table, each with a description" "[ $TABLE_TOOLS -gt 0 ] && api $A/tools | jq -e '(.tools|length)==$TABLE_TOOLS and all(.tools[]; (.description|length)>0 and (.permission|length)>0)' >/dev/null"
 check "GET /tools offers what the model was offered" "[ \"\$(api $A/tools | jq -c '[.tools[]|select(.offered)|.name]|sort')\" = '[\"exec\",\"exec_session\",\"list_exec_sessions\"]' ]"
 check "GET /tools names the permission each tool exercises" "api $A/tools | jq -e '(.tools|map({(.name):.permission})|add) | .exec==\"computer.exec\" and .read_file==\"files.read\" and .write_file==\"files.write\" and .cron==\"automations\"' >/dev/null"
 # The host reads the Dot's files through the TCP port, which is limited to /home/dot with every symbolic link followed.
